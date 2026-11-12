@@ -1,0 +1,7 @@
+# Build files, left out of GitHub's language list.
+CMakeLists.txt linguist-detectable=false
+*.cmake linguist-detectable=false
+windows/installer/* linguist-detectable=false
+
+# The Windows side is C++, though GitHub takes some of these for C.
+*.h linguist-language=C++

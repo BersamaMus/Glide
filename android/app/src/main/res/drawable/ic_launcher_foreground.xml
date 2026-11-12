@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Glide "Streak" mark: a photo with a motion-blur trail. Master: branding/glide_icon.svg -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <group android:translateX="24.60" android:translateY="24.60" android:scaleX="0.6" android:scaleY="0.6">
+        <path android:fillColor="#042F2A" android:fillAlpha="0.35" android:pathData="M15.00,26.00 H45.00 A5.00,5.00 0 0 1 50.00,31.00 V31.00 A5.00,5.00 0 0 1 45.00,36.00 H15.00 A5.00,5.00 0 0 1 10.00,31.00 V31.00 A5.00,5.00 0 0 1 15.00,26.00 Z"/>
+        <path android:fillColor="#042F2A" android:fillAlpha="0.6" android:pathData="M27.00,38.00 H45.00 A5.00,5.00 0 0 1 50.00,43.00 V43.00 A5.00,5.00 0 0 1 45.00,48.00 H27.00 A5.00,5.00 0 0 1 22.00,43.00 V43.00 A5.00,5.00 0 0 1 27.00,38.00 Z"/>
+        <path android:fillColor="#042F2A" android:fillAlpha="0.45" android:pathData="M9.00,50.00 H45.00 A5.00,5.00 0 0 1 50.00,55.00 V55.00 A5.00,5.00 0 0 1 45.00,60.00 H9.00 A5.00,5.00 0 0 1 4.00,55.00 V55.00 A5.00,5.00 0 0 1 9.00,50.00 Z"/>
+        <path android:fillColor="#042F2A" android:fillAlpha="0.7" android:pathData="M21.00,62.00 H45.00 A5.00,5.00 0 0 1 50.00,67.00 V67.00 A5.00,5.00 0 0 1 45.00,72.00 H21.00 A5.00,5.00 0 0 1 16.00,67.00 V67.00 A5.00,5.00 0 0 1 21.00,62.00 Z"/>
+        <path android:fillColor="#042F2A" android:fillType="evenOdd" android:pathData="M48.68,26.00 H85.32 A8.68,8.68 0 0 1 94.00,34.68 V63.32 A8.68,8.68 0 0 1 85.32,72.00 H48.68 A8.68,8.68 0 0 1 40.00,63.32 V34.68 A8.68,8.68 0 0 1 48.68,26.00 Z M46.75,64 L60.25,48 L68.9,57 L75.7,50 L87.25,64 Z M76.16,37 A4.34,4.34 0 1 0 84.84,37 A4.34,4.34 0 1 0 76.16,37 Z"/>
+    </group>
+</vector>
