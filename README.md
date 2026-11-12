@@ -5,8 +5,19 @@ no accounts, no ads, no internet. Every picture is there, newest first and
 grouped by month, without any folders to click through.
 
 <p>
-  <img src="docs/img/windows-home.png" alt="Glide on Windows: pictures by month, one open in the preview pane">
+  <img src="docs/img/windows-home.png" alt="Glide on Windows: trips to Venice, Rome and the Italian coast grouped by month, newest first, with a photo of Capri open beside them">
 </p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/img/windows-memories.png" alt="Memories: photos taken on this day in past years, a year at a time"><br><b>Memories:</b> on this day, years ago.</td>
+    <td width="50%"><img src="docs/img/windows-compare.png" alt="Two photos of the same Venice canal compared, ten years apart"><br><b>Compare:</b> then and now, side by side.</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/img/windows-adjust.png" alt="The editor, with light and colour sliders beside a photo of the Italian coast"><br><b>Edit:</b> crop, light, colour and filters.</td>
+    <td width="50%"><img src="docs/img/windows-blur.png" alt="The background behind a statue blurred, leaving the statue sharp"><br><b>Background:</b> blur it, colour-pop it or replace it.</td>
+  </tr>
+</table>
 
 ## Download
 
