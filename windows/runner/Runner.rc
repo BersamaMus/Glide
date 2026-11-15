@@ -89,11 +89,14 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
+            // Never change CompanyName or ProductName: Glide's settings and
+            // saved data live in AppData\Roaming\<CompanyName>\<ProductName>,
+            // so a new name would start everyone off empty.
             VALUE "CompanyName", "com.bersamamus" "\0"
             VALUE "FileDescription", "Glide" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "glide" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.bersamamus. All rights reserved." "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 BersamaMus" "\0"
             VALUE "OriginalFilename", "glide.exe" "\0"
             VALUE "ProductName", "Glide" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"

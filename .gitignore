@@ -55,6 +55,7 @@ build/
 
 # Kept on this PC, not on GitHub: notes for Claude and editor settings.
 /CLAUDE.md
+/DEVELOPER_GUIDE.md
 /.vscode/
 /devtools_options.yaml
 

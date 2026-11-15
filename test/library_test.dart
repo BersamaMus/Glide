@@ -1,9 +1,9 @@
 import 'dart:io';
 
-import 'package:better_image_manager/services/browser.dart';
-import 'package:better_image_manager/services/library_index.dart';
-import 'package:better_image_manager/services/places.dart';
-import 'package:better_image_manager/widgets/picture_grid.dart';
+import 'package:glide/services/browser.dart';
+import 'package:glide/services/library_index.dart';
+import 'package:glide/services/places.dart';
+import 'package:glide/widgets/picture_grid.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';

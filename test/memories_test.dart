@@ -1,5 +1,5 @@
-import 'package:better_image_manager/services/gallery.dart';
-import 'package:better_image_manager/services/places.dart';
+import 'package:glide/services/gallery.dart';
+import 'package:glide/services/places.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 

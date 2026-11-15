@@ -1,11 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:better_image_manager/screens/editor_screen.dart';
-import 'package:better_image_manager/services/browser.dart';
-import 'package:better_image_manager/services/library_index.dart';
-import 'package:better_image_manager/services/places.dart';
-import 'package:better_image_manager/theme.dart';
+import 'package:glide/screens/editor_screen.dart';
+import 'package:glide/services/browser.dart';
+import 'package:glide/services/library_index.dart';
+import 'package:glide/services/places.dart';
+import 'package:glide/theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;

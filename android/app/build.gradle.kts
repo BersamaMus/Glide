@@ -28,7 +28,7 @@ val debugSignedReleaseAllowed = System.getenv("GLIDE_DEBUG_SIGNED_RELEASE") == "
 
 android {
     namespace = "com.bersamamus.better_image_manager"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

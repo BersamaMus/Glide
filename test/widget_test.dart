@@ -1,5 +1,5 @@
 import 'package:flutter/widgets.dart';
-import 'package:better_image_manager/main.dart';
+import 'package:glide/main.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

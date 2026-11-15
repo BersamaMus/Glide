@@ -1,7 +1,7 @@
 # Glide
 
 Glide is a photo viewer for Windows and Android that shows the pictures already
-on your PC or phone: no accounts, no ads, no internet. Every picture is there, newest first and
+on your PC or phone: no accounts, no ads, and it works offline. Every picture is there, newest first and
 grouped by month, without any folders to click through.
 
 <p>
@@ -53,7 +53,15 @@ are only on the PC.
 - **Tidy up** *(Windows)*: rename, copy, move, or send pictures to the Recycle
   Bin, one at a time or many at once, with File Explorer's selection and
   shortcuts. On Android, pictures can be shared or moved to the phone's trash.
-- **Open with Glide** *(Windows)*: offered for pictures in File Explorer.
+- **Open with Glide** *(Windows)*: offered for pictures in File Explorer. With
+  Glide already open, the picture shows in that window rather than a second one.
+- **Update notices:** says when a new version is out, with a link to download
+  it.
+- **Private:** Glide collects nothing, and your pictures never leave your
+  device. It only goes online to ask GitHub whether a newer version is out when
+  it opens, sending nothing about you; turn it off in Settings. (On Android,
+  the model that finds a picture's subject is downloaded by Google Play
+  services.) See the [privacy policy](https://bersamamus.com/glide/privacy).
 
 Glide never reads OneDrive files that are only online, so it doesn't download
 them.
@@ -91,4 +99,11 @@ Building the installer needs [Inno Setup](https://jrsoftware.org/isinfo.php)
 3. Make a release tagged `v` plus the version name, without the build number
    (`1.0.1+2` is tagged `v1.0.1`), and attach the installer renamed to
    `Glide-Setup.exe` and the APK renamed to `Glide.apk`. Jeti, on Windows and
-   Android, then offers the update to everyone who has Glide.
+   Android, then offers the update to everyone who has Glide, and Glide itself
+   says a new version is out when it opens. Both read the tag, so keep it
+   `vX.Y.Z`.
+
+## Licence
+
+Glide is free software, released under the [GNU General Public License v3.0](LICENSE): you may use, change and share it, as long as what you share stays under the same licence.
+

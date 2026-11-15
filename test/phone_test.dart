@@ -1,4 +1,4 @@
-import 'package:better_image_manager/services/places.dart';
+import 'package:glide/services/places.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:native_imaging/native_imaging.dart';
 

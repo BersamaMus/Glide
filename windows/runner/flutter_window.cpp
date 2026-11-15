@@ -1,8 +1,12 @@
 #include "flutter_window.h"
 
+#include <flutter/standard_method_codec.h>
+
 #include <optional>
+#include <string>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "utils.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -27,6 +31,14 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
+  // How a second copy of Glide finds this window, and tells the app what it
+  // was started with.
+  ::SetPropW(GetHandle(), kWindowMark, reinterpret_cast<HANDLE>(1));
+  open_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "glide/open",
+          &flutter::StandardMethodCodec::GetInstance());
+
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });
@@ -40,6 +52,8 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  ::RemovePropW(GetHandle(), kWindowMark);
+  open_channel_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -65,6 +79,22 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
+    case WM_COPYDATA: {
+      // From a second copy of Glide (main.cpp): this window comes to the
+      // front, showing the folder or picture it was started with, if any.
+      const auto* data = reinterpret_cast<const COPYDATASTRUCT*>(lparam);
+      if (!data || data->dwData != kOpenDataId) break;
+      if (::IsIconic(hwnd)) ::ShowWindow(hwnd, SW_RESTORE);
+      ::SetForegroundWindow(hwnd);
+      if (open_channel_ && data->lpData && data->cbData >= sizeof(wchar_t)) {
+        std::wstring path(static_cast<const wchar_t*>(data->lpData),
+                          data->cbData / sizeof(wchar_t));
+        open_channel_->InvokeMethod(
+            "open", std::make_unique<flutter::EncodableValue>(
+                        Utf8FromUtf16(path.c_str())));
+      }
+      return TRUE;
+    }
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);

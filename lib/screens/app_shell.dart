@@ -2,15 +2,19 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:native_imaging/native_imaging.dart';
 import 'package:path/path.dart' as p;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../services/browser.dart';
 import '../services/places.dart';
+import '../services/update_check.dart';
 import '../theme.dart';
 import '../widgets/picture_actions.dart';
 import '../widgets/picture_grid.dart';
 import '../widgets/preview_pane.dart';
+import 'settings_screen.dart';
 
 /// From this window width up, the tabs run down the side and the preview
 /// pane sits beside the grid. Narrower (a phone), the tabs are in a drawer
@@ -83,6 +87,9 @@ class _AppShellState extends State<AppShell> {
   var _devicesKnown = false;
   Timer? _watcher;
 
+  /// What a second copy of Glide was started with, from Windows.
+  static const _openChannel = MethodChannel('glide/open');
+
   @override
   void initState() {
     super.initState();
@@ -103,9 +110,29 @@ class _AppShellState extends State<AppShell> {
       );
     }
     if (Platform.isWindows) {
+      _openChannel.setMethodCallHandler(_openFromOutside);
       _watch(quietly: true);
       _watcher = Timer.periodic(const Duration(seconds: 3), (_) => _watch());
     }
+    _checkForUpdate();
+  }
+
+  /// Says so when a newer Glide is out, with a link to download it.
+  Future<void> _checkForUpdate() async {
+    final version = await UpdateCheck.newerVersion();
+    if (version == null || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Glide $version is out'),
+        action: SnackBarAction(
+          label: 'Download',
+          onPressed: () => launchUrl(releasesPage, mode: LaunchMode.externalApplication),
+        ),
+        // Gone after a while even so (with an action, it'd stay till clicked).
+        persist: false,
+        duration: const Duration(seconds: 10),
+      ),
+    );
   }
 
   void _noteDrive() {
@@ -221,9 +248,15 @@ class _AppShellState extends State<AppShell> {
   }
 
   Future<void> _openFirst() async {
-    final path = widget.open;
+    if (!await _openPath(widget.open)) await _browser.open(_browser.location);
+  }
+
+  /// Opens the folder at [path], or the folder of the picture there with
+  /// that picture chosen. False if there's nothing there to open.
+  Future<bool> _openPath(String? path) async {
     if (path != null && await FileSystemEntity.isDirectory(path)) {
-      return _browser.open(PhotoLibrary(p.absolute(path)));
+      await _browser.open(PhotoLibrary(p.absolute(path)));
+      return true;
     }
     if (path != null && await File(path).exists()) {
       final file = p.absolute(path);
@@ -231,13 +264,24 @@ class _AppShellState extends State<AppShell> {
       if (_browser.pictures.where((picture) => picture.id == file).firstOrNull case final picture?) {
         _browser.click(picture);
       }
-      return;
+      return true;
     }
-    await _browser.open(_browser.location);
+    return false;
+  }
+
+  /// Glide opened again while it's running (Open with, in File Explorer):
+  /// Windows hands this window the folder or picture instead of starting a
+  /// second one (windows/runner/main.cpp). It's shown on the Pictures tab,
+  /// under whatever page is open over it (the editor, say).
+  Future<void> _openFromOutside(MethodCall call) async {
+    if (call.method != 'open' || !mounted) return;
+    setState(() => _tab = _Tab.pictures);
+    await _openPath(call.arguments as String?);
   }
 
   @override
   void dispose() {
+    if (Platform.isWindows) _openChannel.setMethodCallHandler(null);
     _watcher?.cancel();
     _lifecycle?.dispose();
     _browser.removeListener(_noteDrive);
@@ -290,7 +334,7 @@ class _AppShellState extends State<AppShell> {
 
   Widget _page({ValueChanged<Picture>? onOpen}) => _browsing
       ? PictureGrid(browser: _browser, onOpen: onOpen)
-      : const MessageView(icon: Icons.settings_rounded, text: 'Settings are on the way.');
+      : const SettingsScreen();
 
   @override
   Widget build(BuildContext context) {

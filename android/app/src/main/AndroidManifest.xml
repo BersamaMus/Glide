@@ -1,4 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Only to ask GitHub whether a newer Glide is out, when the app opens
+         (off in Settings). -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <!-- The phone's pictures: Android 13 and later have their own permission
          for them, and Android 14 can give just some. Where they were taken
          is hidden without ACCESS_MEDIA_LOCATION. -->

@@ -14,6 +14,7 @@ AppVersion={#AppVersion}
 AppVerName=Glide {#AppVersion}
 AppPublisher=BersamaMus
 AppPublisherURL=https://bersamamus.com/glide
+VersionInfoVersion={#AppVersion}
 DefaultDirName={autopf}\Glide
 DefaultGroupName=Glide
 DisableProgramGroupPage=yes
@@ -23,15 +24,20 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+MinVersion=10.0
 OutputDir=..\..\build\installer
 OutputBaseFilename=Glide-Setup-{#AppVersion}
 SetupIconFile=..\runner\resources\app_icon.ico
 UninstallDisplayIcon={app}\glide.exe
+UninstallDisplayName=Glide
 WizardStyle=modern
 Compression=lzma2
 SolidCompression=yes
 ; Closes a running Glide before updating it.
 CloseApplications=yes
+; Glide's single-instance mutex (windows/runner/main.cpp), so setup knows
+; when it's running.
+AppMutex=Glide.SingleInstance
 ; Explorer picks up Glide in "Open with" straight away.
 ChangesAssociations=yes
 

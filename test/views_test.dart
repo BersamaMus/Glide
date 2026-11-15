@@ -1,9 +1,9 @@
 import 'dart:io';
 
-import 'package:better_image_manager/services/browser.dart';
-import 'package:better_image_manager/services/library_index.dart';
-import 'package:better_image_manager/services/places.dart';
-import 'package:better_image_manager/screens/collage_screen.dart';
+import 'package:glide/services/browser.dart';
+import 'package:glide/services/library_index.dart';
+import 'package:glide/services/places.dart';
+import 'package:glide/screens/collage_screen.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:native_imaging/native_imaging.dart';
 import 'package:path/path.dart' as p;
