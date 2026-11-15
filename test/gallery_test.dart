@@ -15,6 +15,7 @@ void main() {
   late int asked;
 
   setUp(() {
+    AndroidGallery.forgetAll();
     asked = 0;
     afterAsking = 'all';
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
@@ -52,6 +53,29 @@ void main() {
     expect(pictures[0].dimensions, (4096, 3072));
     expect(pictures[2].dimensions, isNull);
     expect(asked, 0);
+  });
+
+  test('pictures are kept from one listing to the next, and made anew only once they change', () async {
+    access = 'all';
+    final first = (await const AndroidGallery().list()).pictures;
+    // Back in the app, the gallery's listed again: the same pictures, not
+    // copies of them to work out all over again.
+    final again = (await const AndroidGallery().list()).pictures;
+    expect([for (final (i, picture) in again.indexed) identical(picture, first[i])], everyElement(isTrue));
+
+    // One's been edited since (it's bigger now), under the same id.
+    final entries = await AndroidGallery.entries();
+    AndroidGallery.entries = () async => [
+      for (final entry in entries)
+        entry.id == 2
+            ? GalleryEntry(2, entry.path, 6000000, entry.taken, entry.modified, entry.width, entry.height)
+            : entry,
+    ];
+    final after = (await const AndroidGallery().list()).pictures;
+    expect(after.first.name, 'IMG_2.jpg');
+    expect(identical(after.first, first.first), isFalse);
+    expect(after.first.bytes, 6000000);
+    expect(identical(after[1], first[1]), isTrue);
   });
 
   test('tiles use the thumbnails Android keeps', () async {

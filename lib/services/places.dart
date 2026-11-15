@@ -69,8 +69,6 @@ const _screenshotNames = [
 /// worth showing, and can be huge.
 bool _hidden(String name) => name.startsWith('.') || name.startsWith(r'$');
 
-int _byName(String a, String b) => a.toLowerCase().compareTo(b.toLowerCase());
-
 /// The earliest a picture's date could be, in ms since 1970: before it, a
 /// clock that was never set (1970 or 1980, where computers' and memory
 /// cards' clocks start).
@@ -81,10 +79,14 @@ final int _earliest = DateTime(1980, 1, 2).millisecondsSinceEpoch;
 /// over, asking the time and the time zone took seconds.
 int _latest() => DateTime.now().millisecondsSinceEpoch + Duration.millisecondsPerDay;
 
-/// [ms] since 1970 as a date, if it's one a picture could have; [latest] is
-/// [_latest].
-DateTime? _plausible(int? ms, int latest) =>
-    ms == null || ms < _earliest || ms > latest ? null : DateTime.fromMillisecondsSinceEpoch(ms);
+/// [ms] since 1970, if that's a date a picture could have; [latest] is
+/// [_latest]. Left as a number: a listing's thousands are sorted and put in
+/// their months by it, and only the few looked at are made dates of (see
+/// [Picture.dateMs]).
+int? _plausible(int? ms, int latest) => ms == null || ms < _earliest || ms > latest ? null : ms;
+
+/// [ms] since 1970 as a date; null for none.
+DateTime? _dateOf(int? ms) => ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
 
 /// The time zone's offset on each day (in ms since 1970 / a day's ms),
 /// asked of the system once a day rather than once a picture: tens of
@@ -93,8 +95,10 @@ final _offsets = <int, int>{};
 
 /// [date] as the clock here showed it: a UTC date whose year, month, day
 /// and time are the local ones, quick to read for thousands of pictures.
-DateTime localDate(DateTime date) {
-  final ms = date.millisecondsSinceEpoch;
+DateTime localDate(DateTime date) => _localDate(date.millisecondsSinceEpoch);
+
+/// [localDate], of [ms] since 1970.
+DateTime _localDate(int ms) {
   final day = ms ~/ Duration.millisecondsPerDay;
   final offset = _offsets.putIfAbsent(
     day,
@@ -109,10 +113,11 @@ const monthNames = [
 ];
 
 /// Its month, as year * 12 + month; 0 for no date.
-int monthOf(Picture picture) {
-  final date = picture.date;
-  if (date == null) return 0;
-  final local = localDate(date);
+int monthOf(Picture picture) => picture._month;
+
+int _monthOfMs(int? ms) {
+  if (ms == null) return 0;
+  final local = _localDate(ms);
   return local.year * 12 + local.month;
 }
 
@@ -126,14 +131,13 @@ String monthLabel(int month) {
 
 /// Newest first; pictures without a date after all the rest.
 int _newestFirst(Picture a, Picture b) {
-  final (x, y) = (a.date, b.date);
+  final (x, y) = (a.dateMs, b.dateMs);
   if (x != y) {
     if (x == null) return 1;
     if (y == null) return -1;
-    final byDate = y.compareTo(x);
-    if (byDate != 0) return byDate;
+    return y.compareTo(x);
   }
-  return _byName(a.name, b.name);
+  return a._sortName.compareTo(b._sortName);
 }
 
 /// A picture shown in the grid and the preview pane, wherever it is.
@@ -146,11 +150,30 @@ sealed class Picture {
   /// changed; null if neither's a date it could have.
   DateTime? get date;
 
+  /// [date], in ms since 1970. What the listings sort and group by: a date
+  /// made for each of tens of thousands of pictures, every time they're
+  /// listed, kept the app waiting (each asks the system for the time zone),
+  /// so [date] itself is only made for the few that are looked at.
+  int? get dateMs;
+
+  /// Its month, as [monthOf] has it: worked out once.
+  late final int _month = _monthOfMs(dateMs);
+
+  /// Its name as it's sorted by, among pictures of the same moment: worked
+  /// out once, and only for those.
+  late final String _sortName = name.toLowerCase();
+
   /// For a tile: small, and quick to get.
   ImageProvider thumbnail(int size);
 
-  /// For the preview, with neither side over [maxSize].
-  ImageProvider image(int maxSize);
+  /// For the preview, with neither side over [maxSize]. One at a preview's
+  /// size is noted with [keepPreview], so only the last few are kept.
+  ImageProvider image(int maxSize) {
+    final image = _image(maxSize);
+    return maxSize >= previewSizeFrom ? keepPreview(image) : image;
+  }
+
+  ImageProvider _image(int maxSize);
 
   /// Its size in bytes, date, and width and height where they're known.
   Future<PictureInfo> info();
@@ -164,6 +187,9 @@ sealed class Picture {
   /// A photo or a screenshot: see [pictureKind]. Worked out the first time
   /// it's asked, as the grid's filter asks of every picture on every listing.
   late final String kind = pictureKind(this);
+
+  /// JPG, PNG, RAW...: see [pictureType]. Worked out once, likewise.
+  late final String type = pictureType(name);
 
   /// What it says about itself (camera, settings, where it was taken), for
   /// the picture previewed; null where that can't be read. On a phone, the
@@ -184,17 +210,21 @@ class PictureInfo {
 
 /// A picture in a folder on this device.
 class LocalPicture extends Picture {
-  LocalPicture(this.file, {this.taken, this.modified, this.bytes, this.galleryId, this.dimensions});
+  LocalPicture(this.file, {this.takenMs, this.modifiedMs, this.bytes, this.galleryId, this.dimensions});
 
   @override
   final int? bytes;
 
   final File file;
 
-  /// When it was taken and last changed, where the listing found out (the
-  /// library, which sorts by them).
-  final DateTime? taken;
-  final DateTime? modified;
+  /// When it was taken and last changed, in ms since 1970, where the listing
+  /// found out (the library, which sorts by them).
+  final int? takenMs;
+  final int? modifiedMs;
+
+  /// [takenMs] and [modifiedMs] as dates: made when they're first asked for.
+  late final DateTime? taken = _dateOf(takenMs);
+  late final DateTime? modified = _dateOf(modifiedMs);
 
   /// On Android, its id in the phone's gallery: for the thumbnail and
   /// metadata Android keeps of it.
@@ -207,17 +237,21 @@ class LocalPicture extends Picture {
   DateTime? get date => taken ?? modified;
 
   @override
-  String get id => file.path;
+  int? get dateMs => takenMs ?? modifiedMs;
 
   @override
-  String get name => p.basename(file.path);
+  String get id => file.path;
+
+  /// Read off its path once: sorting, filtering and the tiles all ask.
+  @override
+  late final String name = p.basename(file.path);
 
   @override
   ImageProvider thumbnail(int size) =>
       galleryId != null ? GalleryThumbnail(galleryId!, size) : pictureThumbnail(file, size: size);
 
   @override
-  ImageProvider image(int maxSize) => pictureImage(file, maxSize: maxSize);
+  ImageProvider _image(int maxSize) => pictureImage(file, maxSize: maxSize);
 
   @override
   Future<PictureInfo> info() async {
@@ -248,7 +282,7 @@ class LocalPicture extends Picture {
 /// A picture on a phone connected by USB.
 class PhonePicture extends Picture {
   PhonePicture(this.phone, this.entry, {int? latest, this.folder = ''})
-    : date = _plausible(entry.modified?.millisecondsSinceEpoch, latest ?? _latest());
+    : dateMs = _plausible(entry.modified?.millisecondsSinceEpoch, latest ?? _latest());
 
   final Phone phone;
   final PhoneEntry entry;
@@ -259,21 +293,25 @@ class PhonePicture extends Picture {
   /// The folder it's in on the phone: "DCIM/Camera".
   final String folder;
 
+  /// Put together once: the selection asks every picture's, over and over.
   @override
-  String get id => 'phone:${phone.serial}/${entry.id}';
+  late final String id = 'phone:${phone.serial}/${entry.id}';
 
   @override
   String get name => entry.name;
 
   /// The phone's date for the file: for a camera's photo, when it was taken.
   @override
-  final DateTime? date;
+  late final DateTime? date = _dateOf(dateMs);
+
+  @override
+  final int? dateMs;
 
   @override
   ImageProvider thumbnail(int size) => PhoneImage(phone.serial, entry.id, entry.name, size, thumbnail: true);
 
   @override
-  ImageProvider image(int maxSize) => PhoneImage(phone.serial, entry.id, entry.name, maxSize);
+  ImageProvider _image(int maxSize) => PhoneImage(phone.serial, entry.id, entry.name, maxSize);
 
   @override
   Future<PictureInfo> info() async => PictureInfo(bytes: entry.size, modified: entry.modified);
@@ -367,7 +405,7 @@ sealed class Location {
   /// Which heading the grid shows [picture] under, as a number that's the
   /// same for all the pictures under one heading (which the listing keeps
   /// together): its month, as in Photos.
-  int group(Picture picture) => monthOf(picture);
+  int group(Picture picture) => picture._month;
 
   /// The heading over the pictures in [group].
   String groupLabel(int group) => monthLabel(group);

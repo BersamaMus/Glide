@@ -61,14 +61,14 @@ class Memories extends Location {
       // In Pictures, and found on its drive too (Windows' paths are the same
       // whatever their case).
       if (!seen.add(Platform.isWindows ? picture.id.toLowerCase() : picture.id)) continue;
-      final date = picture.date;
-      if (date == null) continue;
-      final local = localDate(date);
+      final ms = picture.dateMs;
+      if (ms == null) continue;
+      final local = _localDate(ms);
       days.putIfAbsent(local.month * 100 + local.day, () => []).add((local, picture));
     }
     int chronological((DateTime, Picture) a, (DateTime, Picture) b) {
       final byDate = a.$1.compareTo(b.$1);
-      return byDate != 0 ? byDate : _byName(a.$2.name, b.$2.name);
+      return byDate != 0 ? byDate : a.$2._sortName.compareTo(b.$2._sortName);
     }
 
     // Today's, from the years before this one: the latest year first, as
@@ -96,9 +96,9 @@ class Memories extends Location {
   /// (month * 100 + day) * 10000 + year.
   @override
   int group(Picture picture) {
-    final date = picture.date;
-    if (date == null) return 0;
-    final local = localDate(date);
+    final ms = picture.dateMs;
+    if (ms == null) return 0;
+    final local = _localDate(ms);
     if (local.month == _today.month && local.day == _today.day) return -local.year;
     return (local.month * 100 + local.day) * 10000 + local.year;
   }

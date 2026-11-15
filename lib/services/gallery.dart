@@ -71,8 +71,8 @@ abstract final class Gallery {
     ];
   }
 
-  /// The thumbnail Android keeps of picture [id], neither side over [size],
-  /// upright, as RGBA pixels.
+  /// The thumbnail Android keeps of picture [id], upright, as RGBA pixels:
+  /// at a square tile's size, its shorter side no more than [size].
   ///
   /// The latest asked for go first, and those waiting too long are dropped
   /// (a [NativeImagingException] that's [NativeImagingException.cancelled]):

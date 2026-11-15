@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -70,8 +71,7 @@ class Browser extends ChangeNotifier {
     final ofKind = kind == null ? _all : [for (final picture in _all) if (picture.kind == kind) picture];
     final counts = <String, int>{for (final type in types) type: 0};
     for (final picture in ofKind) {
-      final type = pictureType(picture.name);
-      counts[type] = (counts[type] ?? 0) + 1;
+      counts[picture.type] = (counts[picture.type] ?? 0) + 1;
     }
     typeCounts = counts.entries.map((entry) => (entry.key, entry.value)).toList()
       ..sort((a, b) => b.$2.compareTo(a.$2));
@@ -79,7 +79,7 @@ class Browser extends ChangeNotifier {
         ? ofKind
         : [
             for (final picture in ofKind)
-              if (types.contains(pictureType(picture.name))) picture,
+              if (types.contains(picture.type)) picture,
           ];
   }
 
@@ -111,9 +111,12 @@ class Browser extends ChangeNotifier {
   }
 
   void _keepSelectionShown() {
-    _selected.retainAll({for (final picture in pictures) picture.id});
+    // With nothing selected (as while a drive's looked through, listed again
+    // every second), there's nothing to go through the pictures for.
+    if (_selected.isNotEmpty) _selected.retainAll({for (final picture in pictures) picture.id});
     focused = _byId(focused?.id);
   }
+
   bool loading = false;
   String? error;
 
@@ -140,7 +143,7 @@ class Browser extends ChangeNotifier {
   Timer? _finishedTimer;
 
   Picture? focused;
-  final _selected = <String>{};
+  final _selected = _SelectedIds();
 
   /// Where a Shift+click or Shift+arrow range starts.
   String? _anchor;
@@ -263,11 +266,36 @@ class Browser extends ChangeNotifier {
 
   bool isSelected(Picture picture) => _selected.contains(picture.id);
 
-  /// The selected pictures, in the grid's order.
-  List<Picture> get selection => [
-    for (final picture in pictures)
-      if (_selected.contains(picture.id)) picture,
-  ];
+  /// The selected pictures, in the grid's order. It can't be changed: the
+  /// same list is handed to everyone who asks, so one who sorted it would
+  /// change what the next delete or copy acts on.
+  ///
+  /// Worked out once each time the selection or the pictures change, not
+  /// each time it's asked: the preview pane asks several times over whenever
+  /// it's redrawn, and going through tens of thousands of pictures for each
+  /// made every click and arrow key wait.
+  ///
+  /// The same list is given back until then, so whoever shows it can tell
+  /// with [identical] that it hasn't changed. (A scan's progress, told every
+  /// second, changes neither, so isn't a reason to go through them again.)
+  List<Picture> get selection {
+    if (_selection case (final of, final version, final selection)
+        when identical(of, pictures) && version == _selected.version) {
+      return selection;
+    }
+    final selection = _selected.isEmpty
+        ? const <Picture>[]
+        : List<Picture>.unmodifiable([
+            for (final picture in pictures)
+              if (_selected.contains(picture.id)) picture,
+          ]);
+    _selection = (pictures, _selected.version, selection);
+    return selection;
+  }
+
+  /// [selection] as last worked out, with the pictures and the version of
+  /// what's selected it was worked out from.
+  (List<Picture>, int, List<Picture>)? _selection;
 
   int get selectedCount => _selected.length;
 
@@ -704,8 +732,8 @@ class Browser extends ChangeNotifier {
     try {
       final renamed = LocalPicture(
         await file.rename(target),
-        taken: picture.taken,
-        modified: picture.modified,
+        takenMs: picture.takenMs,
+        modifiedMs: picture.modifiedMs,
         bytes: picture.bytes,
       );
       location.forget(gone: [file.path], added: [target]);
@@ -735,4 +763,50 @@ class Browser extends ChangeNotifier {
     _finishedTimer?.cancel();
     super.dispose();
   }
+}
+
+/// The ids of the pictures selected, counting each change made to them, so
+/// [Browser.selection] knows when it has to be worked out again without
+/// every place that changes them having to say so.
+class _SelectedIds extends SetBase<String> {
+  final _ids = <String>{};
+
+  /// Goes up with each change.
+  int version = 0;
+
+  @override
+  bool add(String id) {
+    final added = _ids.add(id);
+    if (added) version++;
+    return added;
+  }
+
+  @override
+  bool remove(Object? id) {
+    final removed = _ids.remove(id);
+    if (removed) version++;
+    return removed;
+  }
+
+  @override
+  void clear() {
+    if (_ids.isEmpty) return;
+    _ids.clear();
+    version++;
+  }
+
+  @override
+  bool contains(Object? id) => _ids.contains(id);
+
+  @override
+  String? lookup(Object? id) => _ids.lookup(id);
+
+  @override
+  Iterator<String> get iterator => _ids.iterator;
+
+  @override
+  int get length => _ids.length;
+
+  @override
+  Set<String> toSet() => {..._ids};
 }

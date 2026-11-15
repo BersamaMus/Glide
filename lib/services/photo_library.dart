@@ -157,24 +157,27 @@ class PhotoLibrary extends Location {
     final index = await LibraryIndex.load();
     // Dates taken are read with Windows' codecs.
     final readable = Platform.isWindows;
-    final pictures = <LocalPicture>[];
     final unread = <_Found>[];
-    final seen = <String>{};
+    // The pictures as last listed, kept where they're as they were: a
+    // library's listed again every second while it's looked through and
+    // sorted, and making tens of thousands of pictures anew each time (and
+    // working out each one's name, type and kind again) held the app up.
+    final before = session.listed;
+    final listed = <String, LocalPicture>{};
     final latest = _latest();
     for (final file in found) {
-      if (!seen.add(file.path)) continue; // added, and found by the scan too
+      if (listed.containsKey(file.path)) continue; // added, and found by the scan too
       final taken = index.taken(file.path, size: file.size, modified: file.modified);
       if (taken == null && readable && !_notHere.contains(file.path)) unread.add(file);
-      pictures.add(
-        LocalPicture(
-          File(file.path),
-          taken: _plausible(taken, latest),
-          modified: _plausible(file.modified, latest),
-          bytes: file.size,
-        ),
-      );
+      final takenMs = _plausible(taken, latest);
+      final modifiedMs = _plausible(file.modified, latest);
+      final was = before[file.path];
+      listed[file.path] = was != null && was.takenMs == takenMs && was.modifiedMs == modifiedMs && was.bytes == file.size
+          ? was
+          : LocalPicture(File(file.path), takenMs: takenMs, modifiedMs: modifiedMs, bytes: file.size);
     }
-    pictures.sort(_newestFirst);
+    session.listed = listed;
+    final pictures = listed.values.toList()..sort(_newestFirst);
 
     // Still scanning for the first time: shown as found so far.
     if (scanning != null && session.complete == null) {
@@ -183,7 +186,7 @@ class PhotoLibrary extends Location {
     // Pictures gone since the index last saw them: forgotten, once a scan.
     if (scanning == null && !session.pruned) {
       session.pruned = true;
-      if (await index.keepOnly(seen, under: path)) unawaited(index.save());
+      if (await index.keepOnly(listed, under: path)) unawaited(index.save());
     }
 
     var reader = session.reader;
@@ -357,6 +360,10 @@ class _Session {
 
   /// The index has been rid of what the last full scan didn't find.
   var pruned = false;
+
+  /// The pictures as they were last listed, by path: handed out again while
+  /// they're as they were, rather than made anew on every listing.
+  var listed = <String, LocalPicture>{};
 }
 
 /// A library's scan, in an isolate of its own, sending what it finds as it

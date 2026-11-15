@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:native_imaging/native_imaging.dart';
 import 'package:path/path.dart' as p;
@@ -36,6 +37,18 @@ class PictureGrid extends StatefulWidget {
   /// laid out as a phone's gallery: see [_Metrics.phone].
   static const compactWidth = 500.0;
 
+  /// The size (longest side, in pixels) the tiles last got their thumbnails
+  /// at. Asked for at this size elsewhere (by the preview, to show while
+  /// the picture itself is read), a tile's thumbnail is there already,
+  /// rather than got again at another size.
+  ///
+  /// Told after the grid's drawn, not while it's built, and listened to by
+  /// what shows the thumbnails elsewhere: a preview built before the grid
+  /// (opened with a picture, or the layout changed) catches up with it.
+  /// Each grid tells it only when its own tiles' size changes, so two at
+  /// once (one beneath a page pushed over it) don't keep undoing each other.
+  static final thumbnailSize = ValueNotifier<int>(256);
+
   @override
   State<PictureGrid> createState() => _PictureGridState();
 }
@@ -48,6 +61,9 @@ class _PictureGridState extends State<PictureGrid> {
 
   /// The grid's layout, columns and row height, as last laid out.
   var _metrics = _Metrics.pc;
+
+  /// The size this grid last told [PictureGrid.thumbnailSize].
+  int? _toldThumbnailSize;
   var _columns = 1;
   var _rowExtent = PictureGrid.tileExtent + _Metrics.pc.captionHeight + PictureGrid._spacing;
 
@@ -217,6 +233,11 @@ class _PictureGridState extends State<PictureGrid> {
               behavior: HitTestBehavior.translucent,
               child: CustomScrollView(
                 controller: _scroll,
+                // Tiles are made, and their thumbnails asked for, most of a
+                // screenful before they're scrolled to (rather than a few
+                // rows): at an easy pace they're there to see as they come
+                // into view, not filled in after.
+                scrollCacheExtent: const ScrollCacheExtent.viewport(0.75),
                 slivers: [
                   // Stays put while the pictures scroll under it.
                   PinnedHeaderSliver(
@@ -270,6 +291,10 @@ class _PictureGridState extends State<PictureGrid> {
     final m = _metrics;
     // Decoded at about the tiles' size, so thousands of photos stay light.
     final thumbnailSize = (m.tileExtent * MediaQuery.devicePixelRatioOf(context)).round();
+    if (thumbnailSize != _toldThumbnailSize) {
+      _toldThumbnailSize = thumbnailSize;
+      WidgetsBinding.instance.addPostFrameCallback((_) => PictureGrid.thumbnailSize.value = thumbnailSize);
+    }
     return [
       // A month: its heading stays at the top, under the header, while its
       // pictures scroll, until the next month's pushes it off. Keyed by

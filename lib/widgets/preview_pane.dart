@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -7,6 +8,7 @@ import 'package:native_imaging/native_imaging.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../services/browser.dart';
+import '../services/picture_image.dart';
 import '../services/places.dart';
 import '../theme.dart';
 import 'picture_grid.dart';
@@ -76,23 +78,66 @@ class _PreviewPictureState extends State<_PreviewPicture> {
   var _alive = false;
   final _transform = TransformationController();
 
-  /// Whether a picture's been shown yet. After that, selecting another
-  /// keeps the last one up until the new one's decoded, then swaps it in,
-  /// rather than flashing a spinner between them.
-  var _shownOne = false;
+  /// What was last on screen, the thumbnail or the whole picture: kept up
+  /// while the next picture and its thumbnail are both still to come in (or
+  /// its thumbnail can't be had), rather than nothing. A spinner until
+  /// there's been one, never between one picture and the next.
+  ImageProvider? _lastShown;
+
+  /// In the picture's place while neither it nor its thumbnail is in.
+  Widget _meanwhile() => switch (_lastShown) {
+    final last? => Image(image: last, fit: BoxFit.contain, width: double.infinity, height: double.infinity),
+    null => const Center(child: CircularProgressIndicator()),
+  };
+
+  /// The picture shown whole and sharp: the one previewed, once it's been
+  /// that for a moment. Until then (and while it's read and decoded, a
+  /// good part of a second for a camera's photo) it's shown as its tile's
+  /// thumbnail, which is there at once.
+  ///
+  /// Flicked through (an arrow key held down), pictures were each read and
+  /// decoded whole though gone in a blink, the one stopped on waiting behind
+  /// them all, and the thumbnails scrolling into view behind those.
+  late Picture _sharp = widget.picture;
+  Timer? _settling;
+
+  /// Time since the picture last changed; not running until it first does,
+  /// so the first change after the pane opens isn't taken for flicking.
+  final _sinceChanged = Stopwatch();
+
+  /// Changed again this soon, the pictures are being flicked through; left
+  /// this long, the one stopped on is shown sharp.
+  static const _flicking = Duration(milliseconds: 300);
+  static const _settled = Duration(milliseconds: 120);
 
   @override
   void didUpdateWidget(_PreviewPicture old) {
     super.didUpdateWidget(old);
-    if (old.picture.id != widget.picture.id) {
-      // Each picture starts unzoomed and still.
-      _alive = false;
-      _transform.value = Matrix4.identity();
+    if (old.picture.id == widget.picture.id) return;
+    // Each picture starts unzoomed and still.
+    _alive = false;
+    _transform.value = Matrix4.identity();
+    final flicking = _sinceChanged.isRunning && _sinceChanged.elapsed < _flicking;
+    _sinceChanged
+      ..reset()
+      ..start();
+    _settling?.cancel();
+    if (flicking) {
+      _settling = Timer(_settled, () {
+        if (mounted) setState(_sharpen);
+      });
+    } else {
+      _sharpen();
     }
+  }
+
+  void _sharpen() {
+    _sharp = widget.picture;
   }
 
   @override
   void dispose() {
+    _settling?.cancel();
     _transform.dispose();
     super.dispose();
   }
@@ -100,6 +145,27 @@ class _PreviewPictureState extends State<_PreviewPicture> {
   @override
   Widget build(BuildContext context) {
     final picture = widget.picture;
+    // Its tile's thumbnail, in the picture's place till that's there. (A
+    // spinner till the very first is; after that, the last one stays until
+    // the next is in.)
+    final soft = ValueListenableBuilder(
+      valueListenable: PictureGrid.thumbnailSize,
+      builder: (_, size, _) {
+        final thumbnail = picture.thumbnail(size);
+        return Image(
+          image: thumbnail,
+          fit: BoxFit.contain,
+          width: double.infinity,
+          height: double.infinity,
+          frameBuilder: (_, child, frame, wasSynchronous) {
+            if (frame == null && !wasSynchronous) return _meanwhile();
+            _lastShown = thumbnail;
+            return child;
+          },
+          errorBuilder: (_, _, _) => _meanwhile(),
+        );
+      },
+    );
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -109,22 +175,22 @@ class _PreviewPictureState extends State<_PreviewPicture> {
           InteractiveViewer(
             transformationController: _transform,
             maxScale: 8,
-            child: Image(
-              // Big enough to zoom into, without holding a 50 MP
-              // camera photo at full size.
-              image: picture.image(2560),
-              fit: BoxFit.contain,
-              width: double.infinity,
-              height: double.infinity,
-              gaplessPlayback: true,
-              // A spinner while the first one's decoded, or read off a
-              // phone; after that, the last one stays until the next is in.
-              frameBuilder: (_, child, frame, wasSynchronous) {
-                if (frame != null || wasSynchronous) _shownOne = true;
-                return _shownOne ? child : const Center(child: CircularProgressIndicator());
-              },
-              errorBuilder: (_, error, _) => UndecodableImage(name: picture.name, error: error, explain: true),
-            ),
+            child: _sharp.id != picture.id
+                ? soft
+                : Image(
+                    // Big enough to zoom into, without holding a 50 MP
+                    // camera photo at full size.
+                    image: picture.image(_viewerSize),
+                    fit: BoxFit.contain,
+                    width: double.infinity,
+                    height: double.infinity,
+                    frameBuilder: (_, child, frame, wasSynchronous) {
+                      if (frame == null && !wasSynchronous) return soft;
+                      _lastShown = picture.image(_viewerSize);
+                      return child;
+                    },
+                    errorBuilder: (_, error, _) => UndecodableImage(name: picture.name, error: error, explain: true),
+                  ),
           ),
         if (picture is LocalPicture && (Platform.isWindows || picture.galleryId != null))
           Positioned(
@@ -368,14 +434,31 @@ class _SwiperState extends State<_Swiper> {
     super.dispose();
   }
 
+  @override
+  void initState() {
+    super.initState();
+    // Once it's shown: precaching wants to know the screen it's for.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _makeReady(_focusedIndex);
+    });
+  }
+
   void _turnedTo(int index) {
-    final pictures = browser.pictures;
     setState(() => _zoomed = false);
-    browser.click(pictures[index]);
-    // Those either side, ready for the next swipe.
+    browser.click(browser.pictures[index]);
+    _makeReady(index);
+  }
+
+  /// Has the pictures either side of the one at [index] ready for the next
+  /// swipe, and lets go of those further off (see [keepPreview]).
+  void _makeReady(int index) {
+    final pictures = browser.pictures;
     for (final near in [index - 1, index + 1]) {
-      if (near >= 0 && near < pictures.length) precacheImage(pictures[near].image(_viewerSize), context);
+      if (near < 0 || near >= pictures.length) continue;
+      precacheImage(pictures[near].image(_viewerSize), context);
     }
+    // Noted last, so it's the newest of those kept.
+    if (index >= 0 && index < pictures.length) pictures[index].image(_viewerSize);
   }
 
   @override
@@ -465,13 +548,17 @@ class _ZoomablePictureState extends State<_ZoomablePicture> {
           width: double.infinity,
           height: double.infinity,
           gaplessPlayback: true,
-          // The thumbnail meanwhile, as the gallery does, rather than nothing.
+          // The thumbnail meanwhile, as the gallery does, rather than
+          // nothing: its tile's own, which is there already.
           frameBuilder: (_, child, frame, wasSynchronous) => frame == null && !wasSynchronous
-              ? Image(
-                  image: picture.thumbnail(256),
-                  fit: BoxFit.contain,
-                  width: double.infinity,
-                  height: double.infinity,
+              ? ValueListenableBuilder(
+                  valueListenable: PictureGrid.thumbnailSize,
+                  builder: (_, size, _) => Image(
+                    image: picture.thumbnail(size),
+                    fit: BoxFit.contain,
+                    width: double.infinity,
+                    height: double.infinity,
+                  ),
                 )
               : child,
           errorBuilder: (_, error, _) => UndecodableImage(name: picture.name, error: error, explain: true),
@@ -756,9 +843,33 @@ class _SelectionDetails extends StatefulWidget {
 }
 
 class _SelectionDetailsState extends State<_SelectionDetails> {
-  /// The selection the size was added up for, and its sum.
-  int? _summed;
+  /// The selection all this was worked out for; its size, added up; the
+  /// months it's from; and how many of it are on a phone.
+  List<Picture>? _summed;
   late Future<int> _total;
+  String? _monthSpan;
+  var _onPhone = 0;
+
+  /// Counts the selections worked out, so what's shown for an old one isn't
+  /// shown for the next.
+  var _generation = 0;
+
+  /// Whether [selection] is the one already worked out. The browser gives
+  /// the same list back while nothing's changed; a new list (a scan's listed
+  /// the pictures again) is gone through only to see that it's the same.
+  bool _same(List<Picture> selection) {
+    final summed = _summed;
+    if (identical(summed, selection)) return true;
+    if (summed == null || summed.length != selection.length) return false;
+    // The very same pictures, not just the same ids: a listing hands out
+    // the same picture again only while nothing about it has changed, so a
+    // new one (a date taken just read, a file that's grown) is summed anew.
+    for (var i = 0; i < selection.length; i++) {
+      if (!identical(summed[i], selection[i])) return false;
+    }
+    _summed = selection;
+    return true;
+  }
 
   /// How much the selection takes up: added up from what the listing found
   /// out; only those it didn't are looked at, once a selection. (Thousands
@@ -780,18 +891,31 @@ class _SelectionDetailsState extends State<_SelectionDetails> {
     final text = Theme.of(context).textTheme;
     final count = browser.selectedCount;
     final selection = browser.selection;
-    final dates = [for (final picture in selection) ?picture.date]..sort();
-    final onPhone = selection.whereType<PhonePicture>().length;
-    // A new sum only when the selection changes.
-    final key = Object.hashAll(selection.map((picture) => picture.id));
-    if (key != _summed) {
-      _summed = key;
+    // Worked out anew only when the selection changes.
+    if (!_same(selection)) {
+      _summed = selection;
+      _generation++;
       _total = _totalBytes(selection);
+      // The first and last by their numbers: a date made of each of
+      // thousands selected is slow (see [Picture.dateMs]).
+      int? first, last;
+      _onPhone = 0;
+      for (final picture in selection) {
+        if (picture is PhonePicture) _onPhone++;
+        final ms = picture.dateMs;
+        if (ms == null) continue;
+        if (first == null || ms < first) first = ms;
+        if (last == null || ms > last) last = ms;
+      }
+      _monthSpan = first == null || last == null
+          ? null
+          : _monthRange(DateTime.fromMillisecondsSinceEpoch(first), DateTime.fromMillisecondsSinceEpoch(last));
     }
+    final onPhone = _onPhone;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: FutureBuilder(
-        key: ValueKey(key),
+        key: ValueKey(_generation),
         future: _total,
         builder: (context, snapshot) => Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -801,7 +925,7 @@ class _SelectionDetailsState extends State<_SelectionDetails> {
             Text(
               [
                 if (snapshot.data case final bytes?) _formatBytes(bytes),
-                if (dates.isNotEmpty) _monthRange(dates.first, dates.last),
+                ?_monthSpan,
                 // Where some are on the phone and some on this PC.
                 if (onPhone > 0 && onPhone < count) '$onPhone on the phone',
               ].join('  ·  '),

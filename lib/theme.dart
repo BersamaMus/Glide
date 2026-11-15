@@ -85,10 +85,27 @@ ThemeData buildTheme() {
         color: AppColors.textSecondary,
       ),
     ),
-    navigationDrawerTheme: const NavigationDrawerThemeData(
+    // The phone's drawer, styled like the side rail: the chosen place is in
+    // the bright accent on a soft accent pill. Left alone, Material would draw
+    // it in onSecondaryContainer, which here is the dark text meant for
+    // sitting on the solid accent.
+    navigationDrawerTheme: NavigationDrawerThemeData(
       backgroundColor: AppColors.sheet,
       surfaceTintColor: Colors.transparent,
       indicatorColor: AppColors.accentSoft,
+      iconTheme: WidgetStateProperty.resolveWith(
+        (states) => IconThemeData(
+          size: 24,
+          color: states.contains(WidgetState.selected) ? AppColors.accent : AppColors.textSecondary,
+        ),
+      ),
+      labelTextStyle: WidgetStateProperty.resolveWith(
+        (states) => TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          color: states.contains(WidgetState.selected) ? AppColors.accent : AppColors.textSecondary,
+        ),
+      ),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(

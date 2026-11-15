@@ -128,6 +128,27 @@ void main() {
     expect(indexFile.existsSync(), isTrue);
   });
 
+  test('pictures are kept from one listing to the next, and made anew only once they change', () async {
+    final library = PhotoLibrary(root.path);
+    final first = await settled(library);
+    Picture named(Listing listing, String name) => listing.pictures.firstWhere((picture) => picture.name == name);
+
+    // Listed again (as it is every second while a drive's looked through):
+    // the same pictures, not copies of them to work out all over again.
+    final again = await library.list();
+    expect(names(again), names(first));
+    expect(identical(named(again, 'o1.jpg'), named(first, 'o1.jpg')), isTrue);
+
+    // One changed since: that one anew, the rest as they were.
+    await File(p.join(root.path, 'o1.jpg')).setLastModified(DateTime(2025, 11, 2));
+    library.forget();
+    final after = await settled(library);
+    expect(names(after).first, 'o1.jpg');
+    expect(identical(named(after, 'o1.jpg'), named(first, 'o1.jpg')), isFalse);
+    expect(named(after, 'o1.jpg').date, DateTime(2025, 11, 2));
+    expect(identical(named(after, 's2.jpg'), named(first, 's2.jpg')), isTrue);
+  });
+
   test('puts pictures with no date they could have last, under no month', () async {
     // A camera whose clock was never set: its date's in the future.
     await File(p.join(root.path, 'o3.jpg')).setLastModified(DateTime(2049, 12, 31));

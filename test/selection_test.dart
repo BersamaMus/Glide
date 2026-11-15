@@ -209,5 +209,10 @@ void main() {
     await tester.pumpWidget(MaterialApp(home: Scaffold(body: PreviewPane(browser: browser))));
     await tester.pump();
     expect(find.textContaining('4 KB'), findsOneWidget);
+
+    // The preview shows its tile's thumbnail while the picture's read: its
+    // time limit's let run out.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 21));
   });
 }

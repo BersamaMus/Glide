@@ -73,14 +73,18 @@ class LibraryIndex {
       _entries[path] = [size, modified, taken];
 
   /// Forgets pictures in the folder [under] that have gone: not in [paths]
-  /// (what a scan of it found) and not there any more. (One a drive's scan
-  /// leaves out, like an icon, may still be in another library.) True if
-  /// any had gone.
-  Future<bool> keepOnly(Set<String> paths, {required String under}) async {
+  /// (what a scan of it found, by path) and not there any more. (One a
+  /// drive's scan leaves out, like an icon, may still be in another
+  /// library.) True if any had gone.
+  ///
+  /// [paths] is the scan's own map rather than a set made from it: a drive
+  /// may have tens of thousands, and copying them all out would be done on
+  /// the UI thread.
+  Future<bool> keepOnly(Map<String, Object?> paths, {required String under}) async {
     final prefix = under.endsWith(p.separator) ? under : '$under${p.separator}';
     final unfound = [
       for (final path in _entries.keys)
-        if (path.startsWith(prefix) && !paths.contains(path)) path,
+        if (path.startsWith(prefix) && !paths.containsKey(path)) path,
     ];
     if (unfound.isEmpty) return false;
     // Asked of the disk in an isolate: there may be thousands.

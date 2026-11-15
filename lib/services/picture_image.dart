@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -30,6 +31,66 @@ ImageProvider pictureImage(File file, {required int maxSize}) {
     policy: ResizeImagePolicy.fit,
     allowUpscaling: false,
   );
+}
+
+/// From this size up, a picture is a preview's (tens of megabytes once
+/// decoded), and [Picture.image] notes it with [keepPreview].
+const previewSizeFrom = 1024;
+
+/// The big pictures (a preview's, tens of megabytes each once decoded) kept
+/// ready to show again: the last few shown, newest last.
+final _previews = <ImageProvider>[];
+
+/// Notes that [image], a picture at a preview's size, is being shown (or
+/// made ready, as the pictures either side of one swiped between are), and
+/// lets go of all but the last few noted. Gives [image] back, to be shown.
+///
+/// Flutter keeps every picture it's shown until its cache is full, then
+/// drops those shown longest ago: left to that, a handful of previews took
+/// the room of hundreds of tiles' thumbnails, which had to be got again on
+/// scrolling back to them. So previews are let go of here, as others take
+/// their place, and the cache is the thumbnails'.
+///
+/// [Picture.image] does this for every picture asked for at a preview's
+/// size, so whatever shows one needn't remember to.
+T keepPreview<T extends ImageProvider>(T image, {int most = 3}) {
+  _previews
+    ..remove(image)
+    ..add(image);
+  while (_previews.length > most) {
+    _letGo(_previews.removeAt(0));
+  }
+  return image;
+}
+
+/// Takes [image] out of the cache, but not while it's still showing: a page
+/// kept beside the one in view, re-resolved on a resize, would read and
+/// decode the whole picture again. Flutter lets it go once nothing shows it.
+///
+/// One still being decoded (made ready beside the one shown, and swiped
+/// past quickly) is let go of once it's decoded, not before: dropped while
+/// decoding, the work's thrown away, and swiping back to it does it again.
+void _letGo(ImageProvider image) {
+  image.obtainKey(ImageConfiguration.empty).then((key) {
+    final cache = PaintingBinding.instance.imageCache;
+    if (!cache.statusForKey(key).pending) {
+      cache.evict(key, includeLive: false);
+      return;
+    }
+    final stream = image.resolve(ImageConfiguration.empty);
+    late final ImageStreamListener listener;
+    void decoded() {
+      stream.removeListener(listener);
+      // After the cache has taken it in, and only if it's not been shown
+      // again meanwhile.
+      scheduleMicrotask(() {
+        if (!_previews.contains(image)) cache.evict(key, includeLive: false);
+      });
+    }
+
+    listener = ImageStreamListener((_, _) => decoded(), onError: (_, _) => decoded());
+    stream.addListener(listener);
+  });
 }
 
 /// Formats that may be animated, which Flutter plays.
