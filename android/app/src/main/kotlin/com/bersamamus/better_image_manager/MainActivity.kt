@@ -5,6 +5,7 @@ import android.content.ContentUris
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
@@ -138,14 +139,24 @@ class MainActivity : FlutterActivity() {
      * "blocked": none, and Android won't ask again (only Settings can give it).
      */
     private fun access(): String = when {
-        granted(readPermission) -> "all"
+        granted(readPermission) -> "all".also { blocked = false }
         Build.VERSION.SDK_INT >= 34 && granted(someVisualPermission) -> "some"
-        askedBefore && !shouldShowRequestPermissionRationale(readPermission) -> "blocked"
+        blocked && !shouldShowRequestPermissionRationale(readPermission) -> "blocked"
         else -> "none"
     }
 
-    private val askedBefore: Boolean
-        get() = getPreferences(MODE_PRIVATE).getBoolean("askedForAccess", false)
+    /**
+     * Whether the user said no in a way Android won't ask about again. Not
+     * simply "asked before, and Android wouldn't explain why now": that's
+     * also so once its prompt's just been closed (Back, or a tap beside it),
+     * and Android would still ask then.
+     */
+    private var blocked: Boolean
+        get() = getPreferences(MODE_PRIVATE).getBoolean("accessBlocked", false)
+        set(value) = getPreferences(MODE_PRIVATE).edit().putBoolean("accessBlocked", value).apply()
+
+    /** Whether a no to the prompt now showing could be for good: see [askForAccess]. */
+    private var explainedBefore = false
 
     private fun askForAccess(result: MethodChannel.Result) {
         if (askingForAccess != null) {
@@ -153,7 +164,12 @@ class MainActivity : FlutterActivity() {
             return
         }
         askingForAccess = result
-        getPreferences(MODE_PRIVATE).edit().putBoolean("askedForAccess", true).apply()
+        // Asked before: a no now, with nothing to explain, is a no for good
+        // (Android answers at once, without a prompt). Only on the first
+        // ask is that no more than a first no, or the prompt closed.
+        val prefs = getPreferences(MODE_PRIVATE)
+        explainedBefore = shouldShowRequestPermissionRationale(readPermission) || prefs.getBoolean("askedForAccess", false)
+        prefs.edit().putBoolean("askedForAccess", true).apply()
         val permissions = mutableListOf(readPermission)
         if (Build.VERSION.SDK_INT >= 34) permissions += someVisualPermission
         // Where pictures were taken: hidden from apps without it.
@@ -164,6 +180,15 @@ class MainActivity : FlutterActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != ACCESS_REQUEST) return
+        // Said no, not for the first time, and Android won't explain any
+        // more: "Don't ask again", or a second no on Android 11 and later.
+        // An empty answer is the prompt closed unanswered.
+        val read = permissions.indexOf(readPermission)
+        if (read >= 0 && read < grantResults.size && grantResults[read] == PackageManager.PERMISSION_DENIED &&
+            explainedBefore && !shouldShowRequestPermissionRationale(readPermission)
+        ) {
+            blocked = true
+        }
         askingForAccess?.success(access())
         askingForAccess = null
     }
@@ -244,8 +269,13 @@ class MainActivity : FlutterActivity() {
         var bitmap = if (Build.VERSION.SDK_INT >= 29) {
             contentResolver.loadThumbnail(uri, Size(size, size), null)
         } else {
-            MediaStore.Images.Thumbnails.getThumbnail(contentResolver, id, MediaStore.Images.Thumbnails.MINI_KIND, null)
+            val kept = MediaStore.Images.Thumbnails.getThumbnail(contentResolver, id, MediaStore.Images.Thumbnails.MINI_KIND, null)
                 ?: throw IllegalStateException("No thumbnail")
+            // Kept as the camera stored it, not upright (newer Androids' are).
+            val degrees = orientationOf(uri)
+            if (degrees % 360 == 0) kept
+            else Bitmap.createBitmap(kept, 0, 0, kept.width, kept.height, Matrix().apply { postRotate(degrees.toFloat()) }, true)
+                .also { if (it !== kept) kept.recycle() }
         }
         // Newer Androids make one of about the size asked for. Older ones
         // hand over the one they keep, whatever was asked (512 by 384,
@@ -275,6 +305,12 @@ class MainActivity : FlutterActivity() {
         bitmap.recycle()
         return mapOf("width" to width, "height" to height, "pixels" to pixels)
     }
+
+    /** How far picture [uri] is turned from upright, in degrees clockwise (MediaStore's ORIENTATION). */
+    private fun orientationOf(uri: Uri): Int =
+        contentResolver.query(uri, arrayOf(MediaStore.Images.Media.ORIENTATION), null, null, null)?.use {
+            if (it.moveToFirst() && !it.isNull(0)) it.getInt(0) else 0
+        } ?: 0
 
     /** Each of [work]'s threads' own room to copy a thumbnail's pixels through: see [pixelsOf]. */
     private val copying = ThreadLocal<ByteBuffer>()
@@ -367,8 +403,15 @@ class MainActivity : FlutterActivity() {
         }
         if (Build.VERSION.SDK_INT >= 30) {
             trashing = result
-            val request = MediaStore.createTrashRequest(contentResolver, uris, true)
-            startIntentSenderForResult(request.intentSender, TRASH_REQUEST, null, 0, 0, 0)
+            try {
+                val request = MediaStore.createTrashRequest(contentResolver, uris, true)
+                startIntentSenderForResult(request.intentSender, TRASH_REQUEST, null, 0, 0, 0)
+            } catch (e: Exception) {
+                // Android's prompt never showed (a picture already gone, say):
+                // answered now, or every later delete would be "Busy".
+                trashing = null
+                answerError(result, e)
+            }
         } else {
             // No trash before Android 11: deleted, as its own gallery did.
             inBackground(result) {

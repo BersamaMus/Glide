@@ -111,6 +111,9 @@ class _AppShellState extends State<AppShell> {
     }
     if (Platform.isWindows) {
       _openChannel.setMethodCallHandler(_openFromOutside);
+      // Windows holds on to what a second copy hands over until now: sent
+      // before this handler was set, it would have been lost.
+      _openChannel.invokeMethod<void>('ready').catchError((Object _) {});
       _watch(quietly: true);
       _watcher = Timer.periodic(const Duration(seconds: 3), (_) => _watch());
     }

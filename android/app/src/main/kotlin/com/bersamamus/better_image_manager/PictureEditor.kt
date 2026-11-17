@@ -39,6 +39,8 @@ class PictureEditor(private val resolver: ContentResolver, private val images: U
      * longest side, a byte a pixel from 0 (background) to 255 (subject).
      */
     fun subjectMask(id: Long): Map<String, Any> {
+        // ImageDecoder, below, is Android 9's; saving the result needs 10 anyway.
+        if (Build.VERSION.SDK_INT < 29) throw UnsupportedOperationException("Editing needs Android 10 or later")
         val picture = decode(ContentUris.withAppendedId(images, id), maxSide = 1024)
         val segmenter = SubjectSegmentation.getClient(
             SubjectSegmenterOptions.Builder().enableForegroundConfidenceMask().build()
@@ -225,10 +227,15 @@ class PictureEditor(private val resolver: ContentResolver, private val images: U
 
     /** When, where and with what it was taken, from [from] into the JPEG at [to]; it's upright now. */
     private fun copyMetadata(from: Uri, to: Uri) {
+        // Without ACCESS_MEDIA_LOCATION, asking for the original fails
+        // (UnsupportedOperationException, or SecurityException on some
+        // versions): then it's read without where it was taken.
         val original = try {
             resolver.openInputStream(MediaStore.setRequireOriginal(from))
         } catch (_: SecurityException) {
-            resolver.openInputStream(from) // without where it was taken
+            resolver.openInputStream(from)
+        } catch (_: UnsupportedOperationException) {
+            resolver.openInputStream(from)
         }?.use { ExifInterface(it) } ?: return
         resolver.openFileDescriptor(to, "rw")?.use { file ->
             val copy = ExifInterface(file.fileDescriptor)

@@ -119,6 +119,11 @@ struct Device
     bool ready = false;
     unsigned long long bytesTotal = 0;
     unsigned long long bytesFree = 0;
+    // A request failed outright (not just busy): perhaps it was unplugged
+    // and plugged back in between two looks, when it keeps its id but this
+    // handle's dead. It's opened afresh next time the phones are looked for;
+    // opening one that was fine after all costs nothing.
+    std::atomic<bool> stale = false;
 };
 
 std::mutex g_mutex;
@@ -169,12 +174,17 @@ bool childIds(Device &device, const std::wstring &parent, std::vector<std::wstri
     if (FAILED(retrying([&] {
             children.Reset();
             return device.content->EnumObjects(0, parent.c_str(), nullptr, &children);
-        })))
+        }))) {
+        device.stale = true;
         return false;
+    }
     LPWSTR batch[256];
     while (true) {
         ULONG got = 0;
-        if (FAILED(retrying([&] { return children->Next(256, batch, &got); }))) return false;
+        if (FAILED(retrying([&] { return children->Next(256, batch, &got); }))) {
+            device.stale = true;
+            return false;
+        }
         if (got == 0) return true;
         for (ULONG i = 0; i < got; ++i) {
             ids.emplace_back(batch[i]);
@@ -296,7 +306,8 @@ std::vector<std::shared_ptr<Device>> refresh(IPortableDeviceManager *manager)
         {
             std::lock_guard lock(g_mutex);
             if (g_notPhones.count(id)) continue;
-            if (auto found = g_devices.find(id); found != g_devices.end()) device = found->second;
+            if (auto found = g_devices.find(id); found != g_devices.end() && !found->second->stale)
+                device = found->second;
         }
         if (!device) {
             device = open(manager, id);
@@ -322,9 +333,9 @@ std::shared_ptr<Device> bySerial(const std::wstring &serial)
         {
             std::lock_guard lock(g_mutex);
             for (const auto &[id, device] : g_devices)
-                if (device->serial == serial) return device;
+                if (device->serial == serial && !device->stale) return device;
         }
-        if (pass == 0) {   // not opened yet (by this run of the app)
+        if (pass == 0) {   // not opened yet (by this run of the app), or to be opened afresh
             auto manager = create<IPortableDeviceManager>(CLSID_PortableDeviceManager);
             if (!manager) return nullptr;
             refresh(manager.Get());
@@ -422,7 +433,10 @@ NI_EXPORT int32_t ni_phone_read(const wchar_t *serial, const wchar_t *object_id,
 
     std::lock_guard lock(device->mutex);
     ComPtr<IPortableDeviceResources> resources;
-    if (FAILED(device->content->Transfer(&resources))) return E_FAIL;
+    if (FAILED(device->content->Transfer(&resources))) {
+        device->stale = true;
+        return E_FAIL;
+    }
     ComPtr<IStream> stream;
     DWORD chunk = 0;
     const HRESULT opened = retrying([&] {

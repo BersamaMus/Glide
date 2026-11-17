@@ -7,6 +7,8 @@
 #include <flutter/method_channel.h>
 
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "win32_window.h"
 
@@ -43,6 +45,15 @@ class FlutterWindow : public Win32Window {
   // "glide/open": tells the app what a second copy was started with
   // (lib/screens/app_shell.dart).
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> open_channel_;
+
+  // Whether the app is listening on "glide/open" yet (it says "ready" once
+  // it is). Until then, paths a second copy hands over wait in
+  // |waiting_paths_|: sent sooner, they'd be lost.
+  bool app_ready_ = false;
+  std::vector<std::string> waiting_paths_;
+
+  // Hands |path| to the app now, or once it's listening.
+  void Open(std::string path);
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

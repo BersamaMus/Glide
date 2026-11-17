@@ -38,6 +38,21 @@ bool FlutterWindow::OnCreate() {
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
           flutter_controller_->engine()->messenger(), "glide/open",
           &flutter::StandardMethodCodec::GetInstance());
+  // The app says "ready" once it's listening: what came before is sent then.
+  open_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        if (call.method_name() != "ready") {
+          result->NotImplemented();
+          return;
+        }
+        app_ready_ = true;
+        std::vector<std::string> waiting;
+        waiting.swap(waiting_paths_);
+        for (auto& path : waiting) Open(std::move(path));
+        result->Success();
+      });
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
@@ -53,6 +68,7 @@ bool FlutterWindow::OnCreate() {
 
 void FlutterWindow::OnDestroy() {
   ::RemovePropW(GetHandle(), kWindowMark);
+  if (open_channel_) open_channel_->SetMethodCallHandler(nullptr);
   open_channel_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
@@ -89,13 +105,21 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       if (open_channel_ && data->lpData && data->cbData >= sizeof(wchar_t)) {
         std::wstring path(static_cast<const wchar_t*>(data->lpData),
                           data->cbData / sizeof(wchar_t));
-        open_channel_->InvokeMethod(
-            "open", std::make_unique<flutter::EncodableValue>(
-                        Utf8FromUtf16(path.c_str())));
+        Open(Utf8FromUtf16(path.c_str()));
       }
       return TRUE;
     }
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
+}
+
+void FlutterWindow::Open(std::string path) {
+  if (!open_channel_) return;
+  if (!app_ready_) {
+    waiting_paths_.push_back(std::move(path));
+    return;
+  }
+  open_channel_->InvokeMethod(
+      "open", std::make_unique<flutter::EncodableValue>(std::move(path)));
 }

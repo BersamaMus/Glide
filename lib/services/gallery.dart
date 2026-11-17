@@ -1,5 +1,3 @@
-import 'dart:async';
-import 'dart:collection';
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
@@ -86,8 +84,15 @@ abstract final class Gallery {
         return DecodedImage(result['width']! as int, result['height']! as int, result['pixels']! as Uint8List);
       });
 
-  static final _thumbnails = _NewestFirst(running: 4, waiting: 200);
-  static final _backgroundThumbnails = _NewestFirst(running: 2, waiting: 1 << 30);
+  // The same queues as NativeImaging's, given up on after a while too: an
+  // answer that never comes (the activity gone) mustn't hold a turn for good.
+  static final _thumbnails = Limiter(
+    4,
+    timeout: const Duration(seconds: 20),
+    newestFirst: true,
+    maxWaiting: 200,
+  );
+  static final _backgroundThumbnails = Limiter(2, timeout: const Duration(seconds: 20), newestFirst: true);
 
   /// Android's share sheet, with the pictures [ids].
   static Future<void> share(List<int> ids) => _channel.invokeMethod<void>('share', {'ids': ids});
@@ -159,35 +164,5 @@ abstract final class Gallery {
       latitude: number('latitude'),
       longitude: number('longitude'),
     );
-  }
-}
-
-/// Runs [running] tasks at once, the latest asked for first; past [waiting]
-/// waiting, the oldest is dropped without being run.
-class _NewestFirst {
-  _NewestFirst({required this.running, required this.waiting});
-
-  final int running;
-  final int waiting;
-  var _now = 0;
-  final _queue = Queue<Completer<void>>();
-
-  Future<T> run<T>(Future<T> Function() task) async {
-    if (_now >= running) {
-      final turn = Completer<void>();
-      _queue.add(turn);
-      if (_queue.length > waiting) {
-        // ERROR_CANCELLED, as NativeImaging says it.
-        _queue.removeFirst().completeError(NativeImagingException(0x800704C7));
-      }
-      await turn.future;
-    }
-    _now++;
-    try {
-      return await task();
-    } finally {
-      _now--;
-      if (_queue.isNotEmpty) _queue.removeLast().complete();
-    }
   }
 }

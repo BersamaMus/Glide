@@ -33,8 +33,9 @@ std::wstring OpenedPath() {
 
 // Hands [path] (which may be empty) to the Glide already running, which
 // comes to the front, waiting a little for its window if it's only just
-// starting.
-void SendToRunning(const std::wstring& path) {
+// starting. False if there's no window to hand it to: the Glide that was
+// running is closing, or never got as far as a window.
+bool SendToRunning(const std::wstring& path) {
   HWND running = nullptr;
   for (int tries = 0; tries < 100 && !running; tries++) {
     // Win32Window's class (kWindowClassName in win32_window.cpp), marked as
@@ -53,7 +54,7 @@ void SendToRunning(const std::wstring& path) {
         reinterpret_cast<LPARAM>(&running));
     if (!running) ::Sleep(100);
   }
-  if (!running) return;
+  if (!running) return false;
   DWORD process = 0;
   ::GetWindowThreadProcessId(running, &process);
   // This process was just started, so it may hand over the foreground.
@@ -67,6 +68,7 @@ void SendToRunning(const std::wstring& path) {
   ::SendMessageTimeoutW(running, WM_COPYDATA, 0,
                         reinterpret_cast<LPARAM>(&data), SMTO_ABORTIFHUNG,
                         5000, &ignored);
+  return true;
 }
 
 }  // namespace
@@ -85,8 +87,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 #endif
   // Read straight away: the calls below change the last error.
   bool already_running = ::GetLastError() == ERROR_ALREADY_EXISTS;
-  if (already_running) {
-    SendToRunning(OpenedPath());
+  // Opened again just as the last one closes (its window gone, the mutex
+  // not yet let go of), this one starts as usual rather than doing nothing.
+  if (already_running && SendToRunning(OpenedPath())) {
     return EXIT_SUCCESS;
   }
 

@@ -334,6 +334,11 @@ abstract final class NativeImaging {
   /// cropped to [crop] (left, top, width, height as fractions of the turned
   /// picture). In [source]'s format, or JPEG with [asJpeg], or PNG with
   /// [asPng]; its metadata (date taken, camera, location) is kept.
+  ///
+  /// Never given up on, unlike the other calls: the native save can't be
+  /// stopped from here, so a timeout would only say it failed while it went
+  /// on writing [destination] (a big TIFF or RAW with a blurred background
+  /// can take minutes).
   static Future<void> edit(
     String source,
     String destination, {
@@ -380,7 +385,7 @@ abstract final class NativeImaging {
           ),
         );
       });
-    }).timeout(const Duration(minutes: 2), onTimeout: () => throw NativeImagingException(_timedOut));
+    });
   }
 
   /// Where the picture at [path]'s subject is: see [SubjectMask]. Takes a
@@ -446,14 +451,14 @@ abstract final class NativeImaging {
         return DecodedImage(width, height, pixels.materialize().asUint8List());
       });
 
-  static final _thumbnails = _Limiter(
+  static final _thumbnails = Limiter(
     4,
     timeout: const Duration(seconds: 20),
     newestFirst: true,
     maxWaiting: _thumbnailsWaiting,
   );
 
-  static final _backgroundThumbnails = _Limiter(2, timeout: const Duration(seconds: 20));
+  static final _backgroundThumbnails = Limiter(2, timeout: const Duration(seconds: 20));
 
   /// [decode], for a file already read into memory (one from a phone).
   static Future<DecodedImage> decodeBytes(Uint8List bytes, {int maxSize = 0}) => _decodes.run(() async {
@@ -513,7 +518,7 @@ abstract final class NativeImaging {
 
   /// Decoders (HEIC especially) are slow and use a lot of memory, so a
   /// screenful of thumbnails is decoded a few at a time.
-  static final _decodes = _Limiter(3, timeout: const Duration(seconds: 60));
+  static final _decodes = Limiter(3, timeout: const Duration(seconds: 60));
 
   /// Puts a picture on the clipboard: [rgba] (not premultiplied), [width]
   /// by [height], and the same as a [png], for programs that keep its
@@ -671,7 +676,7 @@ abstract final class Phones {
   ///
   /// Thumbnails take their turn apart from the rest, the latest asked for
   /// first: scrolled far, the tiles stopped on get theirs before those
-  /// scrolled past (which, too long waiting, are dropped: see [_Limiter]).
+  /// scrolled past (which, too long waiting, are dropped: see [Limiter]).
   /// So does a whole file read [forTile], for a tile without a thumbnail.
   static Future<Uint8List> read(String serial, String objectId, {bool thumbnail = false, bool forTile = false}) =>
       (thumbnail || forTile ? _phoneThumbnails : _phoneRequests).run(() async {
@@ -701,11 +706,11 @@ abstract final class Phones {
   /// The phone answers one request at a time anyway; two in flight keeps it
   /// busy without a screenful of thumbnails holding up a folder's listing
   /// for long.
-  static final _phoneRequests = _Limiter(2, timeout: const Duration(seconds: 60));
+  static final _phoneRequests = Limiter(2, timeout: const Duration(seconds: 60));
 
   /// Thumbnails, a few tens of milliseconds each: two in flight, so the
   /// phone's never idle between them.
-  static final _phoneThumbnails = _Limiter(
+  static final _phoneThumbnails = Limiter(
     2,
     timeout: const Duration(seconds: 60),
     newestFirst: true,
@@ -910,8 +915,8 @@ class _Recent<T> {
 /// With [maxWaiting], no more than that wait: past it, the oldest is given
 /// up on (ERROR_CANCELLED) without being run. For thumbnails, newest first:
 /// those of tiles scrolled past long since aren't worth the time.
-class _Limiter {
-  _Limiter(this.max, {required this.timeout, this.newestFirst = false, this.maxWaiting});
+class Limiter {
+  Limiter(this.max, {required this.timeout, this.newestFirst = false, this.maxWaiting});
 
   final int max;
   final Duration timeout;
