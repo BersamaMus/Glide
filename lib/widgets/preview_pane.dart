@@ -50,10 +50,7 @@ class PreviewPane extends StatelessWidget {
                 ),
               ),
             ),
-            if (browser.selectedCount > 1)
-              _SelectionDetails(browser: browser)
-            else
-              _Details(picture: picture),
+            if (browser.selectedCount > 1) _SelectionDetails(browser: browser) else _Details(picture: picture),
             _Actions(browser: browser),
             _Progress(browser: browser),
           ],
@@ -177,19 +174,21 @@ class _PreviewPictureState extends State<_PreviewPicture> {
             maxScale: 8,
             child: _sharp.id != picture.id
                 ? soft
-                : Image(
-                    // Big enough to zoom into, without holding a 50 MP
-                    // camera photo at full size.
-                    image: picture.image(_viewerSize),
-                    fit: BoxFit.contain,
-                    width: double.infinity,
-                    height: double.infinity,
-                    frameBuilder: (_, child, frame, wasSynchronous) {
-                      if (frame == null && !wasSynchronous) return soft;
-                      _lastShown = picture.image(_viewerSize);
-                      return child;
-                    },
-                    errorBuilder: (_, error, _) => UndecodableImage(name: picture.name, error: error, explain: true),
+                : _Plays(
+                    child: Image(
+                      // Big enough to zoom into, without holding a 50 MP
+                      // camera photo at full size.
+                      image: picture.image(_viewerSize),
+                      fit: BoxFit.contain,
+                      width: double.infinity,
+                      height: double.infinity,
+                      frameBuilder: (_, child, frame, wasSynchronous) {
+                        if (frame == null && !wasSynchronous) return soft;
+                        _lastShown = picture.image(_viewerSize);
+                        return child;
+                      },
+                      errorBuilder: (_, error, _) => UndecodableImage(name: picture.name, error: error, explain: true),
+                    ),
                   ),
           ),
         if (picture is LocalPicture && (Platform.isWindows || picture.galleryId != null))
@@ -304,7 +303,10 @@ class _PictureViewerState extends State<PictureViewer> {
           return Stack(
             fit: StackFit.expand,
             children: [
-              GestureDetector(onTap: _toggleBars, child: _Swiper(browser: browser)),
+              GestureDetector(
+                onTap: _toggleBars,
+                child: _Swiper(browser: browser),
+              ),
               if (_alive && picture is LocalPicture)
                 GestureDetector(
                   onTap: _toggleBars,
@@ -542,30 +544,47 @@ class _ZoomablePictureState extends State<_ZoomablePicture> {
       child: InteractiveViewer(
         transformationController: _transform,
         maxScale: 8,
-        child: Image(
-          image: picture.image(_viewerSize),
-          fit: BoxFit.contain,
-          width: double.infinity,
-          height: double.infinity,
-          gaplessPlayback: true,
-          // The thumbnail meanwhile, as the gallery does, rather than
-          // nothing: its tile's own, which is there already.
-          frameBuilder: (_, child, frame, wasSynchronous) => frame == null && !wasSynchronous
-              ? ValueListenableBuilder(
-                  valueListenable: PictureGrid.thumbnailSize,
-                  builder: (_, size, _) => Image(
-                    image: picture.thumbnail(size),
-                    fit: BoxFit.contain,
-                    width: double.infinity,
-                    height: double.infinity,
-                  ),
-                )
-              : child,
-          errorBuilder: (_, error, _) => UndecodableImage(name: picture.name, error: error, explain: true),
+        child: _Plays(
+          child: Image(
+            image: picture.image(_viewerSize),
+            fit: BoxFit.contain,
+            width: double.infinity,
+            height: double.infinity,
+            gaplessPlayback: true,
+            // The thumbnail meanwhile, as the gallery does, rather than
+            // nothing: its tile's own, which is there already.
+            frameBuilder: (_, child, frame, wasSynchronous) => frame == null && !wasSynchronous
+                ? ValueListenableBuilder(
+                    valueListenable: PictureGrid.thumbnailSize,
+                    builder: (_, size, _) => Image(
+                      image: picture.thumbnail(size),
+                      fit: BoxFit.contain,
+                      width: double.infinity,
+                      height: double.infinity,
+                    ),
+                  )
+                : child,
+            errorBuilder: (_, error, _) => UndecodableImage(name: picture.name, error: error, explain: true),
+          ),
         ),
       ),
     );
   }
+}
+
+/// A GIF (or animated WebP) opened plays, as a video would, even with
+/// Android's animations turned off (Remove animations, or a battery saver
+/// that sets their speed to nothing): Flutter holds a picture's animation
+/// still then, as it does the app's own, and GIFs showed only their first
+/// frame. The app's own animations still follow the setting.
+class _Plays extends StatelessWidget {
+  const _Plays({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) =>
+      MediaQuery(data: MediaQuery.of(context).copyWith(disableAnimations: false), child: child);
 }
 
 /// The picture's name, a line of what it is (size, megapixels, format), and
@@ -877,10 +896,12 @@ class _SelectionDetailsState extends State<_SelectionDetails> {
   Future<int> _totalBytes(List<Picture> selection) async {
     var total = 0;
     for (final picture in selection) {
-      total += picture.bytes ?? switch (picture) {
-        LocalPicture(:final file) => await file.length().catchError((Object _) => 0),
-        _ => 0,
-      };
+      total +=
+          picture.bytes ??
+          switch (picture) {
+            LocalPicture(:final file) => await file.length().catchError((Object _) => 0),
+            _ => 0,
+          };
     }
     return total;
   }
