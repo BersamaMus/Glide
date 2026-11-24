@@ -145,15 +145,27 @@ Future<Listing> _listAll(List<Location> from) async {
   // One that fails is listed again (and left out) with the rest.
   final pending = [for (final listing in listings) ?listing.pending?.then((_) {}, onError: (Object _) {})];
   final looking = listings.any((listing) => listing.work == Work.looking);
-  final sorting = [
+  // Sorting if any is (cameras are read with the dates there), else reading
+  // cameras alone: as far along as the furthest behind at what's said, so a
+  // source still reading cameras doesn't hold back how far sorting's got.
+  List<double> progressOf(Work work) => [
     for (final listing in listings)
-      if (listing.work == Work.sorting) listing.progress ?? 0,
+      if (listing.work == work) listing.progress ?? 0,
   ];
+  final sorting = progressOf(Work.sorting);
+  final cameras = progressOf(Work.cameras);
+  final (work, progress) = looking
+      ? (Work.looking, null)
+      : sorting.isNotEmpty
+      ? (Work.sorting, sorting.reduce(min))
+      : cameras.isNotEmpty
+      ? (Work.cameras, cameras.reduce(min))
+      : (null, null);
   return Listing(
     [for (final listing in listings) ...listing.pictures],
     pending: pending.isEmpty ? null : Future.any(pending),
-    work: looking ? Work.looking : (sorting.isEmpty ? null : Work.sorting),
-    progress: looking || sorting.isEmpty ? null : sorting.reduce(min),
+    work: work,
+    progress: progress,
   );
 }
 

@@ -148,6 +148,22 @@ abstract final class Gallery {
     return (id: result['id']! as int, path: result['path']! as String);
   }
 
+  /// The camera each of the pictures [ids] was taken on, in order: its maker
+  /// and model as its metadata names them (null where it doesn't), or null
+  /// for one that couldn't be read just now. Each picture's read for it, as
+  /// Android's gallery doesn't keep them: slow over thousands, so read once
+  /// and kept (see [AndroidGallery]).
+  static Future<List<({String? make, String? model})?>> cameras(List<int> ids) async {
+    final result = (await _channel.invokeMapMethod<String, Object?>('cameras', {'ids': ids}))!;
+    final makes = (result['makes']! as List).cast<String?>();
+    final models = (result['models']! as List).cast<String?>();
+    final failed = (result['failed'] as List?)?.cast<bool>();
+    return [
+      for (var i = 0; i < ids.length; i++)
+        if (failed != null && failed[i]) null else (make: makes[i], model: models[i]),
+    ];
+  }
+
   /// What picture [id]'s metadata says: camera, settings, where it was taken.
   static Future<PhotoDetails> details(int id) async {
     final values = (await _channel.invokeMapMethod<String, Object?>('details', {'id': id}))!;

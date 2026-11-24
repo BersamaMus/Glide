@@ -86,8 +86,12 @@ NI_EXPORT int32_t ni_copy_picture(const uint8_t *rgba, int32_t width, int32_t he
 // or its equivalent in HEIC and RAW files), as milliseconds since 1970 UTC.
 // states[i] says how it went: 0 found (in taken[i]), 1 none recorded (or the
 // file couldn't be read), 2 not on this PC (a OneDrive file that's online
-// only: reading it would download it, so it isn't).
-NI_EXPORT void ni_dates_taken(const wchar_t **paths, int32_t count, int64_t *taken, int32_t *states);
+// only: reading it would download it, so it isn't). cameras gets the camera
+// each was taken with, one a line in order, its maker and model split by a
+// tab ("NIKON CORPORATION", "NIKON D40"; an empty line if it doesn't say), in
+// a buffer to free with ni_free (null if there wasn't the memory).
+NI_EXPORT void ni_dates_taken(const wchar_t **paths, int32_t count, int64_t *taken, int32_t *states,
+                              wchar_t **cameras);
 
 // The picture's width and height as shown, upright, without decoding it.
 NI_EXPORT int32_t ni_size(const wchar_t *path, int32_t *width, int32_t *height);

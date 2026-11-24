@@ -22,8 +22,8 @@ class Browser extends ChangeNotifier {
 
   Location location;
 
-  /// The pictures shown: all of [location]'s, or with [types] chosen, those
-  /// of those types.
+  /// The pictures shown: all of [location]'s, or with a [kind], [cameras] or
+  /// [types] chosen, those of them.
   List<Picture> pictures = const [];
 
   /// All of [location]'s pictures.
@@ -33,9 +33,24 @@ class Browser extends ChangeNotifier {
   final types = <String>{};
 
   /// How many of each kind there are among the photos or screenshots shown
-  /// ([kind]), most first: the filter's chips. A kind chosen is kept, at 0
-  /// if there are none of it now, so it can be let go of.
+  /// ([kind]) from the cameras chosen ([cameras]), most first: the filter's
+  /// chips. A kind chosen is kept, at 0 if there are none of it now, so it
+  /// can be let go of.
   List<(String, int)> typeCounts = const [];
+
+  /// The cameras and phones (see [Picture.camera]) whose pictures are
+  /// shown; none chosen, all pictures are, whatever took them (or if
+  /// nothing says).
+  final cameras = <String>{};
+
+  /// How many pictures each camera took among the photos or screenshots
+  /// shown ([kind]), most first: the camera chips. One chosen is kept, at
+  /// 0 if there are none of it now, so it can be let go of.
+  List<(String, int)> cameraCounts = const [];
+
+  /// How many of the photos or screenshots shown ([kind]) don't say what
+  /// camera took them (or haven't been read yet).
+  int unknownCameraCount = 0;
 
   /// How many pictures [location] has, whatever the filter.
   int get total => _all.length;
@@ -65,22 +80,63 @@ class Browser extends ChangeNotifier {
     _filter();
   }
 
-  /// Works out [pictures], and the type chips' counts among the photos or
-  /// screenshots shown.
+  /// Works out [pictures]: the photos or screenshots ([kind]), of those the
+  /// ones from the [cameras] chosen, and of those the [types] chosen. Each
+  /// row of chips counts what the row before leaves.
   void _filter() {
     final ofKind = kind == null ? _all : [for (final picture in _all) if (picture.kind == kind) picture];
-    final counts = <String, int>{for (final type in types) type: 0};
+
+    final byCamera = <String, int>{for (final camera in cameras) camera: 0};
+    var unknown = 0;
     for (final picture in ofKind) {
-      counts[picture.type] = (counts[picture.type] ?? 0) + 1;
+      if (picture.camera case final camera?) {
+        byCamera[camera] = (byCamera[camera] ?? 0) + 1;
+      } else {
+        unknown++;
+      }
     }
-    typeCounts = counts.entries.map((entry) => (entry.key, entry.value)).toList()
-      ..sort((a, b) => b.$2.compareTo(a.$2));
-    pictures = types.isEmpty
+    cameraCounts = _mostFirst(byCamera);
+    unknownCameraCount = unknown;
+    final ofCamera = cameras.isEmpty
         ? ofKind
         : [
             for (final picture in ofKind)
+              if (cameras.contains(picture.camera)) picture,
+          ];
+
+    final byType = <String, int>{for (final type in types) type: 0};
+    for (final picture in ofCamera) {
+      byType[picture.type] = (byType[picture.type] ?? 0) + 1;
+    }
+    typeCounts = _mostFirst(byType);
+    pictures = types.isEmpty
+        ? ofCamera
+        : [
+            for (final picture in ofCamera)
               if (types.contains(picture.type)) picture,
           ];
+  }
+
+  /// [counts] as chips have them: most first, then by name.
+  static List<(String, int)> _mostFirst(Map<String, int> counts) =>
+      counts.entries.map((entry) => (entry.key, entry.value)).toList()
+        ..sort((a, b) => b.$2 != a.$2 ? b.$2.compareTo(a.$2) : a.$1.compareTo(b.$1));
+
+  /// Shows [camera]'s pictures too, or no longer; what's selected and now
+  /// hidden is let go.
+  void toggleCamera(String camera) {
+    if (!cameras.remove(camera)) cameras.add(camera);
+    _filter();
+    _keepSelectionShown();
+    notifyListeners();
+  }
+
+  /// Shows every camera's pictures again, and those that don't say.
+  void showAllCameras() {
+    if (cameras.isEmpty) return;
+    cameras.clear();
+    _filter();
+    notifyListeners();
   }
 
   /// Shows [type]'s pictures too, or no longer; what's selected and now
@@ -161,6 +217,7 @@ class Browser extends ChangeNotifier {
     _selected.clear();
     _anchor = null;
     types.clear();
+    cameras.clear();
     kind = null;
     _setAll(const []);
     loading = true;

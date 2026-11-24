@@ -22,14 +22,23 @@ class DecodedImage {
   final Uint8List pixels;
 }
 
-/// When a picture was taken, as far as [NativeImaging.datesTaken] found out.
+/// When a picture was taken, and on what camera, as far as
+/// [NativeImaging.datesTaken] found out.
 class DateTaken {
-  const DateTaken(DateTime this.date) : onThisPC = true;
+  const DateTaken(DateTime this.date, {this.make, this.model}) : onThisPC = true;
 
-  const DateTaken._(this.date, {required this.onThisPC});
+  /// A picture that doesn't say when it was taken, but may say what took it.
+  const DateTaken.undated({this.make, this.model}) : date = null, onThisPC = true;
+
+  const DateTaken._(this.date, {required this.onThisPC}) : make = null, model = null;
 
   /// Null for [none] and [notHere].
   final DateTime? date;
+
+  /// The camera's maker and model as the picture names them ("NIKON
+  /// CORPORATION", "NIKON D40"); null where it doesn't.
+  final String? make;
+  final String? model;
 
   /// False for [notHere]: the file wasn't read.
   final bool onThisPC;
@@ -302,7 +311,8 @@ abstract final class NativeImaging {
   /// When each of [paths] was taken, from its metadata, in order: a time;
   /// [DateTaken.none] if it doesn't say (or couldn't be read); or
   /// [DateTaken.notHere] for a OneDrive file that's online only, which
-  /// isn't read as that would download it.
+  /// isn't read as that would download it. With the camera it was taken
+  /// on, where it says, read at the same time.
   ///
   /// Given up on (ERROR_TIMEOUT) if a codec hangs over one of them.
   static Future<List<DateTaken>> datesTaken(List<String> paths) => Isolate.run(() {
@@ -313,15 +323,29 @@ abstract final class NativeImaging {
       }
       final taken = arena<Int64>(paths.length);
       final states = arena<Int32>(paths.length);
-      _datesTaken(array, paths.length, taken, states);
-      return [
-        for (var i = 0; i < paths.length; i++)
-          switch (states[i]) {
-            0 => DateTaken(DateTime.fromMillisecondsSinceEpoch(taken[i], isUtc: true).toLocal()),
-            2 => DateTaken.notHere,
-            _ => DateTaken.none,
-          },
-      ];
+      final cameras = arena<Pointer<Utf16>>();
+      _datesTaken(array, paths.length, taken, states, cameras);
+      // One line a picture, in order: maker and model split by a tab, or empty.
+      List<String> lines = const [];
+      if (cameras.value != nullptr) {
+        try {
+          lines = cameras.value.toDartString().split('\n');
+        } finally {
+          _free(cameras.value.cast());
+        }
+      }
+      String? part(List<String> fields, int i) => i < fields.length && fields[i].isNotEmpty ? fields[i] : null;
+      final results = <DateTaken>[];
+      for (var i = 0; i < paths.length; i++) {
+        final fields = i < lines.length ? lines[i].split('\t') : const <String>[];
+        final (make, model) = (part(fields, 0), part(fields, 1));
+        results.add(switch (states[i]) {
+          0 => DateTaken(DateTime.fromMillisecondsSinceEpoch(taken[i], isUtc: true).toLocal(), make: make, model: model),
+          2 => DateTaken.notHere,
+          _ => DateTaken.undated(make: make, model: model),
+        });
+      }
+      return results;
     });
   }).timeout(const Duration(minutes: 2), onTimeout: () => throw NativeImagingException(_timedOut));
 
@@ -761,8 +785,8 @@ final _transfer = _lib
 
 final _datesTaken = _lib
     .lookupFunction<
-      Void Function(Pointer<Pointer<Utf16>>, Int32, Pointer<Int64>, Pointer<Int32>),
-      void Function(Pointer<Pointer<Utf16>>, int, Pointer<Int64>, Pointer<Int32>)
+      Void Function(Pointer<Pointer<Utf16>>, Int32, Pointer<Int64>, Pointer<Int32>, Pointer<Pointer<Utf16>>),
+      void Function(Pointer<Pointer<Utf16>>, int, Pointer<Int64>, Pointer<Int32>, Pointer<Pointer<Utf16>>)
     >('ni_dates_taken');
 
 final _edit = _lib

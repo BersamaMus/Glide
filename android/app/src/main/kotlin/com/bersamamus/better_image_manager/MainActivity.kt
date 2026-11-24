@@ -18,6 +18,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.nio.ByteBuffer
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
@@ -29,6 +30,10 @@ class MainActivity : FlutterActivity() {
     // Thumbnails are a few milliseconds each from Android's cache: a few at
     // once keeps the grid filling while it scrolls.
     private val work = Executors.newFixedThreadPool(4)
+
+    // Reading the cameras of thousands of pictures, the first time: apart,
+    // so it doesn't hold up the thumbnails while it goes on.
+    private val reading = Executors.newFixedThreadPool(2)
     private val main = Handler(Looper.getMainLooper())
     private var askingForAccess: MethodChannel.Result? = null
     private val editor by lazy { PictureEditor(contentResolver, images) }
@@ -50,6 +55,7 @@ class MainActivity : FlutterActivity() {
                     thumbnail(call.argument<Number>("id")!!.toLong(), call.argument<Int>("size")!!)
                 }
                 "details" -> inBackground(result) { details(call.argument<Number>("id")!!.toLong()) }
+                "cameras" -> inBackground(result, reading) { cameras(call.argument<List<Number>>("ids")!!) }
                 "share" -> {
                     share(ids(call.argument<List<Number>>("ids")!!))
                     result.success(null)
@@ -81,6 +87,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         work.shutdownNow()
+        reading.shutdownNow()
         super.onDestroy()
     }
 
@@ -94,8 +101,8 @@ class MainActivity : FlutterActivity() {
      * sent included, Dart is answered: a call left unanswered would wait
      * forever, holding up the thumbnails queued behind it.
      */
-    private fun inBackground(result: MethodChannel.Result, task: () -> Any?) {
-        work.execute {
+    private fun inBackground(result: MethodChannel.Result, on: ExecutorService = work, task: () -> Any?) {
+        on.execute {
             val value = try {
                 task()
             } catch (e: Throwable) {
@@ -347,15 +354,14 @@ class MainActivity : FlutterActivity() {
         }
         val exif = contentResolver.openInputStream(uri)?.use { ExifInterface(it) } ?: return emptyMap()
         fun number(tag: String) = exif.getAttributeDouble(tag, Double.NaN).takeIf { !it.isNaN() && it > 0 }
-        fun text(tag: String) = exif.getAttribute(tag)?.trim()?.takeIf { it.isNotEmpty() }
         val place = FloatArray(2)
         val located = exif.getLatLong(place) && (place[0] != 0f || place[1] != 0f)
         return mapOf(
-            "make" to text(ExifInterface.TAG_MAKE),
-            "model" to text(ExifInterface.TAG_MODEL),
+            "make" to exif.text(ExifInterface.TAG_MAKE),
+            "model" to exif.text(ExifInterface.TAG_MODEL),
             // EXIF's own names: Android's ExifInterface reads them, though
             // it has no constants for them.
-            "lens" to text("LensModel"),
+            "lens" to exif.text("LensModel"),
             "fnumber" to number(ExifInterface.TAG_F_NUMBER),
             "exposure" to number(ExifInterface.TAG_EXPOSURE_TIME),
             "iso" to number("ISOSpeedRatings"),
@@ -365,6 +371,46 @@ class MainActivity : FlutterActivity() {
             "longitude" to if (located) place[1].toDouble() else null,
         )
     }
+
+    /**
+     * The camera each of the pictures [ids] was taken on, in order: its
+     * maker and model as its EXIF names them (null where it doesn't).
+     * Android's gallery doesn't keep them, so each picture's own metadata is
+     * read: only its header, through a file descriptor it can seek in,
+     * rather than the whole file. failed says which couldn't be read just
+     * now (gone since it was listed, its card taken out, access changed,
+     * still being written, out of memory): Dart reads those again next run
+     * rather than keeping them as saying nothing.
+     */
+    private fun cameras(ids: List<Number>): Map<String, List<Any?>> {
+        val makes = ArrayList<String?>(ids.size)
+        val models = ArrayList<String?>(ids.size)
+        val failed = ArrayList<Boolean>(ids.size)
+        for (id in ids) {
+            var make: String? = null
+            var model: String? = null
+            var read = false
+            try {
+                val uri = ContentUris.withAppendedId(images, id.toLong())
+                contentResolver.openFileDescriptor(uri, "r")?.use { file ->
+                    val exif = ExifInterface(file.fileDescriptor)
+                    make = exif.text(ExifInterface.TAG_MAKE)
+                    model = exif.text(ExifInterface.TAG_MODEL)
+                    read = true
+                }
+            } catch (e: Throwable) {
+                // One that can't be read (even running out of memory over a
+                // huge one) leaves the rest of its lot read.
+            }
+            makes += make
+            models += model
+            failed += !read
+        }
+        return mapOf("makes" to makes, "models" to models, "failed" to failed)
+    }
+
+    /** What the picture says for [tag], trimmed: null where it doesn't say. */
+    private fun ExifInterface.text(tag: String) = getAttribute(tag)?.trim()?.takeIf { it.isNotEmpty() }
 
     // ---------------------------------------------------------------------
     // Sharing and deleting

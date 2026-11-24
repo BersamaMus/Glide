@@ -15,6 +15,7 @@ void main() {
       (call) async => call.method == 'access' ? 'all' : null,
     );
     Memories.now = () => DateTime(2026, 10, 22, 9);
+    AndroidGallery.readCameras = (ids) async => [for (final _ in ids) (make: null, model: null)];
     var id = 0;
     GalleryEntry taken(String name, DateTime date) =>
         GalleryEntry(++id, '/storage/emulated/0/DCIM/Camera/$name', 1000, date.millisecondsSinceEpoch, date.millisecondsSinceEpoch, 0, 0);

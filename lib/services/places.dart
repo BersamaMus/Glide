@@ -6,6 +6,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:native_imaging/native_imaging.dart';
 import 'package:path/path.dart' as p;
 
@@ -64,6 +65,64 @@ const _screenshotNames = [
   "capture d'écran", 'capture d’écran', "capture d'ecran", 'capture d’ecran',
   'schermata', 'captura de pantalla', 'tangkapan layar', 'skärmavbild',
 ];
+
+/// The camera or phone a picture was taken on, as people call it, from the
+/// maker and model its metadata names: "NIKON CORPORATION" and "NIKON D40"
+/// are a "Nikon D40", "OPPO" and "CPH2581" an "OPPO CPH2581", "Apple" and
+/// "iPhone 15 Pro" an "iPhone 15 Pro". The grid's camera chips. The same
+/// name for the same camera whichever way it was read (Windows', Android's),
+/// so its pictures are under one chip. Null if the picture names neither.
+String? cameraName(String? make, String? model) {
+  final rawMake = _squeeze(make ?? '');
+  var name = _squeeze(model ?? '');
+  // The maker without its company's trappings: "NIKON CORPORATION", Nikon.
+  var brand = rawMake.replaceAll(_companyWords, '').replaceAll(RegExp(r'[\s,.]+$'), '');
+  if (brand.isEmpty) brand = rawMake;
+  brand = _brands[brand.toLowerCase()] ?? brand;
+  if (name.isEmpty) return brand.isEmpty ? null : brand;
+  if (brand.isEmpty) return name;
+  final lower = name.toLowerCase();
+  // The model says the maker already ("NIKON D40", "Canon EOS R5"): in the
+  // maker's own spelling. Its first word's enough to go by ("NIKON" for
+  // "NIKON CORPORATION"). Run into the model ("LG-H870", "OM-1"), it's
+  // part of the model's name, kept as it is.
+  final firstWord = rawMake.split(' ').first.toLowerCase();
+  for (final said in {brand.toLowerCase(), firstWord}) {
+    if (said.isEmpty) continue;
+    if (lower == said || lower.startsWith('$said ')) return '$brand${name.substring(said.length)}';
+    if (lower.startsWith('$said-')) return name;
+  }
+  // Models known by their own name, not their maker's.
+  if (_ownNames.any((own) => lower.startsWith(own))) return name;
+  return '$brand $name';
+}
+
+/// [text] with runs of spaces made one, and none at its ends.
+String _squeeze(String text) => text.trim().replaceAll(RegExp(r'\s+'), ' ');
+
+/// What follows a maker's name in a company's: "CORPORATION", "Co., Ltd.".
+final _companyWords = RegExp(
+  r'\s+(corporation|corp\.?|company|co\.?,?|ltd\.?|limited|inc\.?|imaging|optical|electronics|'
+  r'mobile communications?|mobile|telecommunications?|technology|technologies|digital solutions|gmbh|ag|s\.?a\.?)\b',
+  caseSensitive: false,
+);
+
+/// Makers as they spell themselves, by how their cameras may write them.
+const _brands = {
+  'nikon': 'Nikon', 'canon': 'Canon', 'sony': 'Sony', 'fujifilm': 'Fujifilm', 'fuji': 'Fujifilm', //
+  'fuji photo film': 'Fujifilm', 'olympus': 'Olympus', 'om': 'OM System', 'panasonic': 'Panasonic',
+  'leica': 'Leica', 'leica camera': 'Leica', 'pentax': 'Pentax', 'ricoh': 'Ricoh', 'eastman kodak': 'Kodak',
+  'kodak': 'Kodak', 'samsung': 'Samsung', 'apple': 'Apple', 'google': 'Google', 'huawei': 'Huawei',
+  'honor': 'Honor', 'xiaomi': 'Xiaomi', 'motorola': 'Motorola', 'lg': 'LG', 'oneplus': 'OnePlus',
+  'asus': 'ASUS', 'nokia': 'Nokia', 'hmd global': 'Nokia', 'hmd': 'HMD', 'casio': 'Casio', 'minolta': 'Minolta',
+  'konica minolta': 'Konica Minolta', 'hasselblad': 'Hasselblad', 'sigma': 'Sigma', 'gopro': 'GoPro',
+  'dji': 'DJI', 'oppo': 'OPPO', 'vivo': 'vivo', 'realme': 'realme', 'htc': 'HTC', 'zte': 'ZTE',
+  'nothing': 'Nothing', 'microsoft': 'Microsoft', 'blackberry': 'BlackBerry',
+};
+
+/// Models whose names are enough on their own: "iPhone 15 Pro" rather than
+/// "Apple iPhone 15 Pro", and a Nokia's "Nokia 7 plus" rather than "HMD".
+const _ownNames = ['iphone', 'ipad', 'ipod', 'nokia', 'galaxy', 'pixel', 'redmi', 'poco', 'lumia'];
 
 /// Hidden and system folders ($RECYCLE.BIN, .thumbnails) hold no pictures
 /// worth showing, and can be huge.
@@ -191,6 +250,11 @@ sealed class Picture {
   /// JPG, PNG, RAW...: see [pictureType]. Worked out once, likewise.
   late final String type = pictureType(name);
 
+  /// The camera or phone it was taken on (see [cameraName]), where the
+  /// listing found out: null if it doesn't say, or it hasn't been read yet.
+  /// The grid's camera chips.
+  String? get camera => null;
+
   /// What it says about itself (camera, settings, where it was taken), for
   /// the picture previewed; null where that can't be read. On a phone, the
   /// file's read whole (as it is for the preview anyway).
@@ -210,10 +274,13 @@ class PictureInfo {
 
 /// A picture in a folder on this device.
 class LocalPicture extends Picture {
-  LocalPicture(this.file, {this.takenMs, this.modifiedMs, this.bytes, this.galleryId, this.dimensions});
+  LocalPicture(this.file, {this.takenMs, this.modifiedMs, this.bytes, this.galleryId, this.dimensions, this.camera});
 
   @override
   final int? bytes;
+
+  @override
+  final String? camera;
 
   final File file;
 
@@ -340,6 +407,10 @@ enum Work {
 
   /// Reading when they were taken, to put them in their places.
   sorting,
+
+  /// Reading what camera took each, for the camera chips (their dates
+  /// already known).
+  cameras,
 }
 
 /// What a location holds.

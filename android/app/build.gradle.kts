@@ -66,6 +66,8 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+            // Beside Flutter's own rules: what R8 mustn't rename (ML Kit).
+            proguardFiles("proguard-rules.pro")
         }
     }
 }

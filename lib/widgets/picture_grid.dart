@@ -442,6 +442,7 @@ class _Header extends StatelessWidget {
             ),
             if (location.switchable) _SourceChips(browser: browser, oneRow: metrics.compact),
             _KindChips(browser: browser, oneRow: metrics.compact),
+            _CameraChips(browser: browser, oneRow: metrics.compact),
             _TypeChips(browser: browser, oneRow: metrics.compact),
             if (metrics.compact)
               Padding(
@@ -492,6 +493,86 @@ class _TypeChips extends StatelessWidget {
               showCheckmark: false,
               visualDensity: VisualDensity.compact,
               onSelected: (_) => browser.toggleType(type),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The cameras and phones the pictures here were taken on ("Nikon D40",
+/// "OPPO Find X9 Pro"), with how many each took, to show only some: none
+/// chosen, all are ("All" lets go of every one chosen). Only
+/// when there's a choice to make: more than one
+/// camera, or one and pictures that don't say (screenshots, downloads).
+///
+/// The most used few, then a chip for the rest, as a drive's pictures may
+/// have come from dozens of cameras: a camera chosen is shown whatever.
+class _CameraChips extends StatefulWidget {
+  const _CameraChips({required this.browser, required this.oneRow});
+
+  final Browser browser;
+  final bool oneRow;
+
+  /// How many are shown before "more".
+  static const _few = 6;
+
+  @override
+  State<_CameraChips> createState() => _CameraChipsState();
+}
+
+class _CameraChipsState extends State<_CameraChips> {
+  var _all = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final browser = widget.browser;
+    final counts = browser.cameraCounts;
+    final chosen = browser.cameras;
+    final choice = counts.length > 1 || (counts.length == 1 && browser.unknownCameraCount > 0);
+    if (!choice && chosen.isEmpty) return const SizedBox.shrink();
+    // Two or so left over aren't worth a chip of their own to get to.
+    final folded = !_all && counts.length > _CameraChips._few + 2;
+    final shown = folded
+        ? [
+            for (final (i, entry) in counts.indexed)
+              if (i < _CameraChips._few || chosen.contains(entry.$1)) entry,
+          ]
+        : counts;
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: _Chips(
+        oneRow: widget.oneRow,
+        spacing: 6,
+        children: [
+          FilterChip(
+            label: const Text('All'),
+            selected: chosen.isEmpty,
+            showCheckmark: false,
+            visualDensity: VisualDensity.compact,
+            onSelected: (_) => browser.showAllCameras(),
+          ),
+          for (final (camera, count) in shown)
+            FilterChip(
+              label: Text('$camera  ${_thousands(count)}'),
+              selected: chosen.contains(camera),
+              showCheckmark: false,
+              visualDensity: VisualDensity.compact,
+              onSelected: (_) => browser.toggleCamera(camera),
+            ),
+          if (folded)
+            ActionChip(
+              avatar: const Icon(Icons.expand_more_rounded, size: 16),
+              label: Text('${counts.length - shown.length} more'),
+              visualDensity: VisualDensity.compact,
+              onPressed: () => setState(() => _all = true),
+            )
+          else if (_all && counts.length > _CameraChips._few + 2)
+            ActionChip(
+              avatar: const Icon(Icons.expand_less_rounded, size: 16),
+              label: const Text('Fewer'),
+              visualDensity: VisualDensity.compact,
+              onPressed: () => setState(() => _all = false),
             ),
         ],
       ),
@@ -596,6 +677,7 @@ class _ProgressState extends State<_Progress> {
           Text(switch (work) {
             Work.looking => 'Looking for pictures…  ${_thousands(count)} found so far',
             Work.sorting => 'Sorting by date taken…  ${((progress ?? 0) * 100).floor()}%',
+            Work.cameras => 'Finding which camera took each…  ${((progress ?? 0) * 100).floor()}%',
           }, style: style),
           const SizedBox(height: 6),
           ClipRRect(

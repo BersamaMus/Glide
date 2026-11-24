@@ -104,6 +104,8 @@ class _AppShellState extends State<AppShell> {
       _lifecycle = AppLifecycleListener(
         onResume: () {
           if (_browser.location case AndroidGallery() || Memories()) {
+            // Pictures may have been taken or deleted meanwhile.
+            _browser.location.forget();
             _browser.refresh();
           }
         },

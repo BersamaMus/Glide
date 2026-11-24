@@ -21,7 +21,9 @@ void main() {
     }
   }
 
-  /// Four JPGs, two PNGs, a GIF and a HEIC, a day apart, newest first.
+  /// Four JPGs, two PNGs, a GIF and a HEIC, a day apart, newest first; three
+  /// of the JPGs taken on a Nikon, the HEIC on an iPhone, and the rest not
+  /// saying.
   setUp(() async {
     folder = await Directory.systemTemp.createTemp('filter_test');
     final names = ['a.jpg', 'b.png', 'c.JPEG', 'd.gif', 'e.jpg', 'f.png', 'g.heic', 'h.jpg'];
@@ -32,7 +34,19 @@ void main() {
     }
     PhotoLibrary.forgetAll();
     await LibraryIndex.at(File(p.join(folder.path, '.index', 'index.json')));
-    PhotoLibrary.readDates = (paths) async => [for (final _ in paths) DateTaken.none];
+    const cameras = {
+      'a.jpg': ('NIKON CORPORATION', 'NIKON D40'),
+      'e.jpg': ('NIKON CORPORATION', 'NIKON D40'),
+      'h.jpg': ('NIKON CORPORATION', 'NIKON D40'),
+      'g.heic': ('Apple', 'iPhone 15 Pro'),
+    };
+    PhotoLibrary.readDates = (paths) async => [
+      for (final path in paths)
+        if (cameras[p.basename(path)] case (final make, final model))
+          DateTaken.undated(make: make, model: model)
+        else
+          DateTaken.none,
+    ];
     browser = Browser(PhotoLibrary(folder.path));
     await browser.open(browser.location);
     await settle();
@@ -79,11 +93,69 @@ void main() {
     expect(browser.selectedCount, 4);
   });
 
+  test('counts the pictures each camera took, most first', () {
+    expect(browser.cameraCounts, [('Nikon D40', 3), ('iPhone 15 Pro', 1)]);
+    expect(browser.unknownCameraCount, 4);
+    expect(browser.cameras, isEmpty);
+  });
+
+  test('shows only the cameras chosen, and counts the kinds among them', () {
+    browser.toggleCamera('Nikon D40');
+    expect(shown(), ['a.jpg', 'e.jpg', 'h.jpg']);
+    expect(browser.typeCounts, [('JPG', 3)]);
+    browser.toggleCamera('iPhone 15 Pro');
+    expect(shown(), ['a.jpg', 'e.jpg', 'g.heic', 'h.jpg']);
+    browser.toggleType('HEIC');
+    expect(shown(), ['g.heic']);
+    browser.showAllTypes();
+    browser.showAllCameras();
+    expect(shown(), hasLength(8));
+  });
+
+  test('a camera chosen is kept, at 0, while what is shown has none of its pictures', () {
+    browser.toggleCamera('iPhone 15 Pro');
+    browser.showKind('Screenshots');
+    expect(browser.cameraCounts, [('iPhone 15 Pro', 0)]);
+    expect(shown(), isEmpty);
+  });
+
+  testWidgets('the camera chips choose a camera\'s pictures', (tester) async {
+    tester.view.physicalSize = const Size(900, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: PictureGrid(browser: browser))));
+    expect(find.text('All cameras'), findsNothing);
+    await tester.tap(find.text('Nikon D40  3'));
+    await tester.pump();
+    expect(shown(), ['a.jpg', 'e.jpg', 'h.jpg']);
+    // Tapped again, it's let go of: every picture's shown again.
+    await tester.tap(find.text('Nikon D40  3'));
+    await tester.pump();
+    expect(shown(), hasLength(8));
+    // Or two chosen, and "All" lets go of both at once.
+    await tester.tap(find.text('Nikon D40  3'));
+    await tester.tap(find.text('iPhone 15 Pro  1'));
+    await tester.pump();
+    expect(shown(), hasLength(4));
+    await tester.tap(find.text('All').first);
+    await tester.pump();
+    expect(shown(), hasLength(8));
+    expect(browser.cameras, isEmpty);
+
+    await tester.pumpWidget(const SizedBox());
+    // The thumbnails' time limits, run out (see below).
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(seconds: 21));
+    }
+  });
+
   test('opening another place shows all its kinds again', () async {
     browser.toggleType('GIF');
+    browser.toggleCamera('Nikon D40');
     await browser.open(browser.location);
     await settle();
     expect(browser.types, isEmpty);
+    expect(browser.cameras, isEmpty);
     expect(shown(), hasLength(8));
   });
 
@@ -115,7 +187,7 @@ void main() {
     expect(title, findsOneWidget);
     expect(tester.getTopLeft(title).dy, lessThan(40));
     expect(may, findsOneWidget);
-    final headerBottom = tester.getBottomLeft(find.text('All')).dy;
+    final headerBottom = tester.getBottomLeft(find.text('All').last).dy;
     expect(tester.getTopLeft(may).dy, inInclusiveRange(headerBottom, headerBottom + 60));
 
     await tester.pumpWidget(const SizedBox());

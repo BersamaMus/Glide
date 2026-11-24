@@ -508,12 +508,16 @@ int64_t exifTextMs(const char *text)
     return fileTimeMs(file);
 }
 
-// When the picture was taken; 0 if it doesn't say.
-int64_t dateTaken(IWICImagingFactory *wic, const wchar_t *path)
+std::wstring cameraOf(IWICMetadataQueryReader *reader);
+
+// When the picture was taken (0 if it doesn't say), and in camera its maker
+// and model (see cameraOf).
+int64_t dateTaken(IWICImagingFactory *wic, const wchar_t *path, std::wstring &camera)
 {
     ComPtr<IWICBitmapFrameDecode> frame;
     ComPtr<IWICMetadataQueryReader> reader;
     if (FAILED(openFrame(wic, path, frame)) || FAILED(frame->GetMetadataQueryReader(&reader))) return 0;
+    camera = cameraOf(reader.Get());
     int64_t result = 0;
     PROPVARIANT value;
     PropVariantInit(&value);
@@ -681,6 +685,21 @@ bool placeOf(IWICMetadataQueryReader *reader, double &latitude, double &longitud
            std::abs(latitude) <= 90 && std::abs(longitude) <= 180;
 }
 
+// The camera's maker and model, split by a tab: "NIKON CORPORATION", "NIKON
+// D40". Empty if the picture names neither.
+std::wstring cameraOf(IWICMetadataQueryReader *reader)
+{
+    std::wstring found[2];
+    PROPVARIANT value;
+    for (int i = 0; i < 2; i++) {
+        if (!readAny(reader, textDetails[i].queries, 3, value)) continue;
+        found[i] = textIn(value);
+        PropVariantClear(&value);
+    }
+    if (found[0].empty() && found[1].empty()) return {};
+    return found[0] + L'\t' + found[1];
+}
+
 // See ni_details.
 std::wstring detailsOf(IWICBitmapFrameDecode *frame)
 {
@@ -836,32 +855,38 @@ NI_EXPORT int32_t ni_subject_mask(const wchar_t *path, int32_t *width, int32_t *
     return guarded(call);
 }
 
-NI_EXPORT void ni_dates_taken(const wchar_t **paths, int32_t count, int64_t *taken, int32_t *states)
+NI_EXPORT void ni_dates_taken(const wchar_t **paths, int32_t count, int64_t *taken, int32_t *states,
+                              wchar_t **cameras)
 {
     // COM and the factory once for them all; each picture read guarded, so
-    // one that crashes its codec costs only its date (and the factory, made
-    // afresh after, in case the crash left it broken).
+    // one that crashes its codec costs only its date and camera (and the
+    // factory, made afresh after, in case the crash left it broken).
     ComScope com(COINIT_MULTITHREADED);
     ComPtr<IWICImagingFactory> wic = factory();
+    std::wstring lines;
     for (int32_t i = 0; i < count; i++) {
         taken[i] = 0;
         states[i] = 1;
+        std::wstring camera;
         if (onlyOnline(paths[i])) {
             states[i] = 2;
-            continue;
+        } else if (wic) {
+            auto call = [&] {
+                taken[i] = dateTaken(wic.Get(), paths[i], camera);
+                return 0;
+            };
+            if (guarded(call) != 0) {
+                taken[i] = 0;
+                camera.clear();
+                wic = factory();
+            } else if (taken[i]) {
+                states[i] = 0;
+            }
         }
-        if (!wic) continue;
-        auto call = [&] {
-            taken[i] = dateTaken(wic.Get(), paths[i]);
-            return 0;
-        };
-        if (guarded(call) != 0) {
-            taken[i] = 0;
-            wic = factory();
-            continue;
-        }
-        if (taken[i]) states[i] = 0;
+        lines += camera + L'\n';
     }
+    *cameras = nullptr;
+    handBackText(lines, cameras);
 }
 
 NI_EXPORT int32_t ni_size(const wchar_t *path, int32_t *width, int32_t *height)

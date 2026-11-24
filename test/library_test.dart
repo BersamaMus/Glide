@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:glide/services/browser.dart';
@@ -293,17 +294,92 @@ void main() {
   test('the index survives saves on top of each other, and reads back whole', () async {
     final index = await LibraryIndex.at(indexFile);
     for (var i = 0; i < 20000; i++) {
-      index.put(p.join(root.path, 'p$i.jpg'), size: i, modified: i * 2, taken: i * 3);
+      index.put(p.join(root.path, 'p$i.jpg'), size: i, modified: i * 2, taken: i * 3, camera: i.isOdd ? 'Nikon D40' : '');
     }
     await Future.wait([index.save(), index.save(), index.save()]);
-    index.put(p.join(root.path, 'last.jpg'), size: 1, modified: 2, taken: 3);
+    index.put(p.join(root.path, 'last.jpg'), size: 1, modified: 2, taken: 3, camera: 'OPPO Find X9 Pro');
     await index.save();
 
     final again = await LibraryIndex.at(indexFile);
     expect(again.taken(p.join(root.path, 'p19999.jpg'), size: 19999, modified: 39998), 59997);
+    expect(again.camera(p.join(root.path, 'p19999.jpg'), size: 19999, modified: 39998), 'Nikon D40');
+    expect(again.camera(p.join(root.path, 'p2.jpg'), size: 2, modified: 4), '');
     expect(again.taken(p.join(root.path, 'last.jpg'), size: 1, modified: 2), 3);
+    expect(again.camera(p.join(root.path, 'last.jpg'), size: 1, modified: 2), 'OPPO Find X9 Pro');
     // Changed since it was read: not to be trusted.
     expect(again.taken(p.join(root.path, 'p5.jpg'), size: 6, modified: 10), isNull);
+    expect(again.camera(p.join(root.path, 'p5.jpg'), size: 6, modified: 10), isNull);
+  });
+
+  test('reads what camera took each picture, with its date', () async {
+    dates = {
+      'o1.jpg': DateTaken(DateTime(2025, 8), make: 'NIKON CORPORATION', model: 'NIKON D40'),
+      's1.png': const DateTaken.undated(make: 'OPPO', model: 'CPH2581'),
+    };
+    final listing = await settled(PhotoLibrary(root.path));
+    final cameras = {for (final picture in listing.pictures) picture.name: picture.camera};
+    expect(cameras['o1.jpg'], 'Nikon D40');
+    expect(cameras['s1.png'], 'OPPO CPH2581');
+    expect(cameras['o2.jpg'], isNull);
+
+    // Remembered: not read again after a restart.
+    await restart();
+    asked.clear();
+    final again = await settled(PhotoLibrary(root.path));
+    expect(asked, isEmpty);
+    expect([for (final picture in again.pictures) if (picture.name == 'o1.jpg') picture.camera], ['Nikon D40']);
+  });
+
+  test('an index from before cameras were kept sorts at once, and only cameras are read', () async {
+    dates = {'s2.jpg': DateTaken(DateTime(2019, 5, 1), make: 'Canon', model: 'Canon EOS 5D')};
+    await settled(PhotoLibrary(root.path));
+    await LibraryIndex.idle();
+    // As version 1 wrote it: dates, but no cameras.
+    final json = jsonDecode(await indexFile.readAsString()) as Map<String, dynamic>;
+    await indexFile.writeAsString(
+      jsonEncode({
+        'version': 1,
+        'entries': (json['entries'] as Map<String, dynamic>).map(
+          (path, entry) => MapEntry(path, (entry as List<dynamic>).take(3).toList()),
+        ),
+      }),
+    );
+    await restart();
+    final library = PhotoLibrary(root.path);
+    final first = await scanned(library);
+    // Its date's known, so it's in its place already; its camera isn't yet.
+    expect(names(first).last, 's2.jpg');
+    expect(first.work, Work.cameras);
+    final listing = await settled(library);
+    expect(names(listing).last, 's2.jpg');
+    expect(listing.pictures.last.camera, 'Canon EOS 5D');
+  });
+
+  test('a date already known is kept when a picture read again for its camera can\'t be read', () async {
+    dates = {'s2.jpg': DateTaken(DateTime(2019, 5, 1))};
+    await settled(PhotoLibrary(root.path));
+    await LibraryIndex.idle();
+    // As version 1 wrote it: dates, but no cameras.
+    final json = jsonDecode(await indexFile.readAsString()) as Map<String, dynamic>;
+    await indexFile.writeAsString(
+      jsonEncode({
+        'version': 1,
+        'entries': (json['entries'] as Map<String, dynamic>).map(
+          (path, entry) => MapEntry(path, (entry as List<dynamic>).take(3).toList()),
+        ),
+      }),
+    );
+    await restart();
+    // Given up on this time, as a lot would be that a codec hung over.
+    PhotoLibrary.readDates = (paths) async => throw NativeImagingException(0x800705B4);
+    final listing = await settled(PhotoLibrary(root.path));
+    expect(names(listing).last, 's2.jpg');
+    expect((listing.pictures.last as LocalPicture).taken, DateTime(2019, 5, 1));
+
+    // And it stays so after another restart.
+    await restart();
+    final again = await settled(PhotoLibrary(root.path));
+    expect(names(again).last, 's2.jpg');
   });
 
   test('a scan over before the index has loaded still finishes', () async {

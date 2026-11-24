@@ -42,6 +42,8 @@ are only on the PC.
 - **Every source the same way** *(Windows)*: Pictures, your other drives, a USB
   stick, and an Android phone plugged in by cable. Switch between them with
   chips at the top, and watch slow scans fill in as they go.
+- **Filter by camera:** show only what one camera or phone took (a Nikon D40,
+  an OPPO Find X9 Pro), or only photos, screenshots, or one file type.
 - **Memories:** what you took on this day in years past.
 - **The formats cameras use:** JPG, PNG, GIF, WebP, BMP, HEIC, AVIF, TIFF, and,
   on Windows, RAW files from most cameras (with Windows' own codecs).

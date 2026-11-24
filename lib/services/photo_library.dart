@@ -49,7 +49,8 @@ class PhotoLibrary extends Location {
   /// any scan under way, and any reading of dates.
   static final _sessions = <PhotoLibrary, _Session>{};
 
-  /// Reads when pictures were taken: Windows' codecs, or a stand-in in tests.
+  /// Reads when pictures were taken, and on what camera: Windows' codecs, or
+  /// a stand-in in tests.
   @visibleForTesting
   static Future<List<DateTaken>> Function(List<String> paths) readDates = NativeImaging.datesTaken;
 
@@ -155,7 +156,7 @@ class PhotoLibrary extends Location {
     ].where((file) => !session.gone.contains(file.path)).toList();
 
     final index = await LibraryIndex.load();
-    // Dates taken are read with Windows' codecs.
+    // Dates taken and cameras are read with Windows' codecs.
     final readable = Platform.isWindows;
     final unread = <_Found>[];
     // The pictures as last listed, kept where they're as they were: a
@@ -165,16 +166,30 @@ class PhotoLibrary extends Location {
     final before = session.listed;
     final listed = <String, LocalPicture>{};
     final latest = _latest();
+    // Whether any unread picture's date isn't known yet either: if they all
+    // are (an index from before cameras were kept), only cameras are read.
+    var undated = false;
     for (final file in found) {
       if (listed.containsKey(file.path)) continue; // added, and found by the scan too
-      final taken = index.taken(file.path, size: file.size, modified: file.modified);
-      if (taken == null && readable && !_notHere.contains(file.path)) unread.add(file);
+      final known = index.read(file.path, size: file.size, modified: file.modified);
+      final taken = known?.taken;
+      final read = known?.camera;
+      if (read == null && readable && !_notHere.contains(file.path)) {
+        unread.add(file);
+        if (known == null) undated = true;
+      }
+      final camera = read == null || read.isEmpty ? null : read;
       final takenMs = _plausible(taken, latest);
       final modifiedMs = _plausible(file.modified, latest);
       final was = before[file.path];
-      listed[file.path] = was != null && was.takenMs == takenMs && was.modifiedMs == modifiedMs && was.bytes == file.size
+      listed[file.path] =
+          was != null &&
+              was.takenMs == takenMs &&
+              was.modifiedMs == modifiedMs &&
+              was.bytes == file.size &&
+              was.camera == camera
           ? was
-          : LocalPicture(File(file.path), takenMs: takenMs, modifiedMs: modifiedMs, bytes: file.size);
+          : LocalPicture(File(file.path), takenMs: takenMs, modifiedMs: modifiedMs, bytes: file.size, camera: camera);
     }
     session.listed = listed;
     final pictures = listed.values.toList()..sort(_newestFirst);
@@ -191,10 +206,15 @@ class PhotoLibrary extends Location {
 
     var reader = session.reader;
     if ((reader == null || (reader.done && !reader.failed)) && unread.isNotEmpty) {
-      reader = session.reader = _DateReader(unread, index);
+      reader = session.reader = _IndexReader(
+        unread,
+        index,
+        _readDates,
+        work: undated ? Work.sorting : Work.cameras,
+      );
     }
     if (reader != null && !reader.done) {
-      return Listing(pictures, pending: reader.next, work: Work.sorting, progress: reader.progress);
+      return Listing(pictures, pending: reader.next, work: reader.work, progress: reader.progress);
     }
     // A scan again, behind what's shown: listed again once it's done.
     return Listing(pictures, pending: scanning?.whenDone);
@@ -355,8 +375,8 @@ class _Session {
   final gone = <String>{};
   final added = <String, _Found>{};
 
-  /// Dates being read, if they are.
-  _DateReader? reader;
+  /// Dates and cameras being read, if they are.
+  _IndexReader<_Found>? reader;
 
   /// The index has been rid of what the last full scan didn't find.
   var pruned = false;
@@ -505,20 +525,28 @@ void _scanInIsolate((SendPort, String, bool) job) {
   }
 }
 
-/// Reads when pictures were taken into the [LibraryIndex], a few hundred at
-/// a time (each lot split between isolates), saying when each lot's done,
-/// and saving the index every so often, so what's been read is kept even if
-/// the app's closed part way.
-class _DateReader {
-  _DateReader(List<_Found> files, LibraryIndex index) : _total = files.length {
-    _run(files, index);
+/// Reads what pictures say about themselves into the [LibraryIndex] (when
+/// they were taken, and on what camera), a few hundred at a time (each lot
+/// split between [readSome]s at once), saying when each lot's done, and
+/// saving the index every so often, so what's been read is kept even if the
+/// app's closed part way.
+///
+/// A library's pictures are read by [_readDates]; the Android gallery's
+/// cameras by [AndroidGallery._readCameras].
+class _IndexReader<T> {
+  _IndexReader(
+    List<T> items,
+    LibraryIndex index,
+    Future<void> Function(List<T> some, LibraryIndex index) readSome, {
+    required this.work,
+    int atOnce = 4,
+    int each = 50,
+  }) : _total = items.length {
+    _run(items, index, readSome, atOnce, each);
   }
 
-  /// Read at once: [_isolates] isolates, [_each] files each. Small lots, so
-  /// a codec that hangs over one file (given up on after a while) costs the
-  /// others in its lot little.
-  static const _isolates = 4;
-  static const _each = 50;
+  /// What it's reading, for the user to see.
+  final Work work;
 
   var done = false;
 
@@ -537,14 +565,23 @@ class _DateReader {
   /// would otherwise wait for one that never comes.)
   Future<void> get next => done ? Future.value() : _next.future;
 
-  Future<void> _run(List<_Found> files, LibraryIndex index) async {
+  /// Reads [atOnce] lots of [each] at a time. Small lots, so a codec that
+  /// hangs over one file (given up on after a while) costs the others in its
+  /// lot little.
+  Future<void> _run(
+    List<T> items,
+    LibraryIndex index,
+    Future<void> Function(List<T>, LibraryIndex) readSome,
+    int atOnce,
+    int each,
+  ) async {
     final sinceSave = Stopwatch()..start();
     try {
-      for (var start = 0; start < files.length; start += _isolates * _each) {
-        final lot = files.sublist(start, (start + _isolates * _each).clamp(0, files.length));
+      for (var start = 0; start < items.length; start += atOnce * each) {
+        final lot = items.sublist(start, (start + atOnce * each).clamp(0, items.length));
         await Future.wait([
-          for (var from = 0; from < lot.length; from += _each)
-            _readSome(lot.sublist(from, (from + _each).clamp(0, lot.length)), index),
+          for (var from = 0; from < lot.length; from += each)
+            readSome(lot.sublist(from, (from + each).clamp(0, lot.length)), index),
         ]);
         _read += lot.length;
         // Saved in an isolate, while reading goes on.
@@ -552,7 +589,7 @@ class _DateReader {
           unawaited(index.save());
           sinceSave.reset();
         }
-        if (start + _isolates * _each < files.length) _signal();
+        if (start + atOnce * each < items.length) _signal();
       }
       await index.save();
     } on Object {
@@ -560,25 +597,6 @@ class _DateReader {
     } finally {
       done = true;
       _signal(now: true);
-    }
-  }
-
-  static Future<void> _readSome(List<_Found> files, LibraryIndex index) async {
-    List<DateTaken> results;
-    try {
-      results = await PhotoLibrary.readDates([for (final file in files) file.path]);
-    } on NativeImagingException {
-      // Given up on (a codec hung over one of them): by when they were last
-      // changed, then, rather than tried again and again.
-      results = [for (final _ in files) DateTaken.none];
-    }
-    for (final (i, result) in results.indexed) {
-      final file = files[i];
-      if (!result.onThisPC) {
-        PhotoLibrary._notHere.add(file.path);
-      } else {
-        index.put(file.path, size: file.size, modified: file.modified, taken: result.date?.millisecondsSinceEpoch ?? 0);
-      }
     }
   }
 
@@ -592,5 +610,37 @@ class _DateReader {
     final next = _next;
     _next = Completer();
     next.complete();
+  }
+}
+
+/// Reads when some of a library's pictures were taken, and on what camera,
+/// into [index]: see [_IndexReader].
+Future<void> _readDates(List<_Found> files, LibraryIndex index) async {
+  List<DateTaken> results;
+  try {
+    results = await PhotoLibrary.readDates([for (final file in files) file.path]);
+  } on NativeImagingException {
+    // Given up on (a codec hung over one of them): by when they were last
+    // changed, then, rather than tried again and again.
+    results = [for (final _ in files) DateTaken.none];
+  }
+  for (final (i, result) in results.indexed) {
+    final file = files[i];
+    if (!result.onThisPC) {
+      PhotoLibrary._notHere.add(file.path);
+    } else {
+      // A date read before (read again only for its camera, from an index
+      // from before cameras were kept) is kept if it isn't read this time:
+      // the file hasn't changed, so a read that failed (or a lot given up
+      // on) mustn't move a picture that was in its right place.
+      final known = index.taken(file.path, size: file.size, modified: file.modified);
+      index.put(
+        file.path,
+        size: file.size,
+        modified: file.modified,
+        taken: result.date?.millisecondsSinceEpoch ?? known ?? 0,
+        camera: cameraName(result.make, result.model) ?? '',
+      );
+    }
   }
 }
