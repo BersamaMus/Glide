@@ -913,72 +913,171 @@ NI_EXPORT int32_t ni_details_memory(const uint8_t *data, int64_t length, wchar_t
 // The clipboard.
 // ---------------------------------------------------------------------------
 
-NI_EXPORT int32_t ni_copy_picture(const uint8_t *rgba, int32_t width, int32_t height, const uint8_t *png,
-                                  int64_t png_length)
+namespace {
+
+// Opens the clipboard, emptied, for a window made for it: the clipboard's to
+// be owned by one of this thread's own, for as long as it takes. What's put
+// on it stays after it's gone. Another program may have it open for a
+// moment, so it's tried again for a while.
+HRESULT openClipboard(HWND &owner)
 {
-    if (width <= 0 || height <= 0 || png_length <= 0) return E_INVALIDARG;
-    // The clipboard's to be owned by a window: one of this thread's own,
-    // for as long as it takes. What's put on it stays after it's gone.
-    HWND owner = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, nullptr, nullptr);
+    owner = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, nullptr, nullptr);
     if (!owner) return HRESULT_FROM_WIN32(GetLastError());
-    HRESULT hr = S_OK;
     for (int attempt = 0; !OpenClipboard(owner); attempt++) {
-        // Another program has it open for a moment.
         if (attempt == 10) {
+            const HRESULT hr = HRESULT_FROM_WIN32(GetLastError());
             DestroyWindow(owner);
-            return HRESULT_FROM_WIN32(GetLastError());
+            return hr;
         }
         Sleep(20);
     }
     EmptyClipboard();
+    return S_OK;
+}
 
-    // As a PNG, for programs that keep the transparency (Office, browsers,
-    // chat apps)...
-    if (HGLOBAL data = GlobalAlloc(GMEM_MOVEABLE, SIZE_T(png_length))) {
-        memcpy(GlobalLock(data), png, size_t(png_length));
-        GlobalUnlock(data);
-        if (!SetClipboardData(RegisterClipboardFormatW(L"PNG"), data)) GlobalFree(data);
-    }
-    // ...and as a bitmap, for every other (Paint: on white). Bottom row
-    // first, BGRA, its colours premultiplied as Windows has them.
+void closeClipboard(HWND owner)
+{
+    CloseClipboard();
+    DestroyWindow(owner);
+}
+
+// Puts data on the open clipboard as format: the clipboard's from then on,
+// or freed if it won't take it. Null data is the memory it couldn't have.
+HRESULT put(UINT format, HGLOBAL data)
+{
+    if (!data) return E_OUTOFMEMORY;
+    if (SetClipboardData(format, data)) return S_OK;
+    const HRESULT hr = HRESULT_FROM_WIN32(GetLastError());
+    GlobalFree(data);
+    return hr;
+}
+
+// length bytes from from, in memory the clipboard can take.
+HGLOBAL bytes(const void *from, size_t length)
+{
+    HGLOBAL data = GlobalAlloc(GMEM_MOVEABLE, length);
+    if (!data) return nullptr;
+    memcpy(GlobalLock(data), from, length);
+    GlobalUnlock(data);
+    return data;
+}
+
+// A picture as a bitmap, as Windows keeps them: bottom row first, BGRA, its
+// colours premultiplied. rgba is width by height, already premultiplied or
+// not. Paint and the like show its transparency on white.
+HGLOBAL bitmap(const uint8_t *rgba, int32_t width, int32_t height, bool premultiplied)
+{
     const size_t pixels = size_t(width) * height * 4;
-    if (HGLOBAL data = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPV5HEADER) + pixels)) {
-        auto *header = static_cast<BITMAPV5HEADER *>(GlobalLock(data));
-        *header = {};
-        header->bV5Size = sizeof(BITMAPV5HEADER);
-        header->bV5Width = width;
-        header->bV5Height = height;
-        header->bV5Planes = 1;
-        header->bV5BitCount = 32;
-        header->bV5Compression = BI_BITFIELDS;
-        header->bV5RedMask = 0x00FF0000;
-        header->bV5GreenMask = 0x0000FF00;
-        header->bV5BlueMask = 0x000000FF;
-        header->bV5AlphaMask = 0xFF000000;
-        header->bV5CSType = LCS_sRGB;
-        header->bV5Intent = LCS_GM_IMAGES;
-        auto *out = reinterpret_cast<uint8_t *>(header + 1);
-        for (int32_t y = 0; y < height; y++) {
-            const uint8_t *from = rgba + size_t(height - 1 - y) * width * 4;
-            uint8_t *to = out + size_t(y) * width * 4;
-            for (int32_t x = 0; x < width; x++, from += 4, to += 4) {
-                const unsigned a = from[3];
+    HGLOBAL data = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPV5HEADER) + pixels);
+    if (!data) return nullptr;
+    auto *header = static_cast<BITMAPV5HEADER *>(GlobalLock(data));
+    *header = {};
+    header->bV5Size = sizeof(BITMAPV5HEADER);
+    header->bV5Width = width;
+    header->bV5Height = height;
+    header->bV5Planes = 1;
+    header->bV5BitCount = 32;
+    header->bV5Compression = BI_BITFIELDS;
+    header->bV5RedMask = 0x00FF0000;
+    header->bV5GreenMask = 0x0000FF00;
+    header->bV5BlueMask = 0x000000FF;
+    header->bV5AlphaMask = 0xFF000000;
+    header->bV5CSType = LCS_sRGB;
+    header->bV5Intent = LCS_GM_IMAGES;
+    auto *out = reinterpret_cast<uint8_t *>(header + 1);
+    for (int32_t y = 0; y < height; y++) {
+        const uint8_t *from = rgba + size_t(height - 1 - y) * width * 4;
+        uint8_t *to = out + size_t(y) * width * 4;
+        for (int32_t x = 0; x < width; x++, from += 4, to += 4) {
+            const unsigned a = from[3];
+            if (premultiplied) {
+                to[0] = from[2];
+                to[1] = from[1];
+                to[2] = from[0];
+            } else {
                 to[0] = uint8_t((from[2] * a + 127) / 255);
                 to[1] = uint8_t((from[1] * a + 127) / 255);
                 to[2] = uint8_t((from[0] * a + 127) / 255);
-                to[3] = uint8_t(a);
             }
+            to[3] = uint8_t(a);
         }
-        GlobalUnlock(data);
-        if (!SetClipboardData(CF_DIBV5, data)) {
-            hr = HRESULT_FROM_WIN32(GetLastError());
-            GlobalFree(data);
-        }
-    } else {
-        hr = E_OUTOFMEMORY;
     }
-    CloseClipboard();
-    DestroyWindow(owner);
+    GlobalUnlock(data);
+    return data;
+}
+
+// The files at paths as File Explorer copies them (CF_HDROP): their paths,
+// each ended by a null, and the list by another.
+HGLOBAL fileList(const wchar_t **paths, int32_t count)
+{
+    size_t chars = 1;
+    for (int32_t i = 0; i < count; i++) chars += wcslen(paths[i]) + 1;
+    // Zeroed, so it's ended already.
+    HGLOBAL data = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, sizeof(DROPFILES) + chars * sizeof(wchar_t));
+    if (!data) return nullptr;
+    auto *drop = static_cast<DROPFILES *>(GlobalLock(data));
+    drop->pFiles = sizeof(DROPFILES);
+    drop->fWide = TRUE;
+    auto *out = reinterpret_cast<wchar_t *>(drop + 1);
+    for (int32_t i = 0; i < count; i++) {
+        const size_t length = wcslen(paths[i]) + 1;
+        memcpy(out, paths[i], length * sizeof(wchar_t));
+        out += length;
+    }
+    GlobalUnlock(data);
+    return data;
+}
+
+} // namespace
+
+NI_EXPORT int32_t ni_copy_files(const wchar_t **paths, int32_t count, const wchar_t *picture, int32_t max_size)
+{
+    if (count <= 0) return E_INVALIDARG;
+    // The picture's decoded first, while the clipboard's still free for
+    // other programs: a RAW file can take a second or two.
+    int32_t width = 0, height = 0;
+    uint8_t *pixels = nullptr;
+    HRESULT decoded = E_FAIL;
+    if (picture) {
+        auto call = [&] { return decodeUnguarded(picture, max_size, &width, &height, &pixels); };
+        decoded = guarded(call);
+    }
+    HWND owner = nullptr;
+    HRESULT hr = openClipboard(owner);
+    if (SUCCEEDED(hr)) {
+        hr = put(CF_HDROP, fileList(paths, count));
+        if (SUCCEEDED(hr)) {
+            // Copied, not cut: pasted into a folder, they stay where they are.
+            const DWORD effect = DROPEFFECT_COPY;
+            put(RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT), bytes(&effect, sizeof effect));
+            // The picture too, where it could be read; else the file's enough.
+            if (SUCCEEDED(decoded)) put(CF_DIBV5, bitmap(pixels, width, height, true));
+        }
+        closeClipboard(owner);
+    }
+    free(pixels);
+    return hr;
+}
+
+NI_EXPORT int32_t ni_copy_picture(const uint8_t *rgba, int32_t width, int32_t height, const uint8_t *png,
+                                  int64_t png_length)
+{
+    if (width <= 0 || height <= 0 || png_length <= 0) return E_INVALIDARG;
+    // Made before the clipboard's opened, so it's not held while they are.
+    HGLOBAL asPng = bytes(png, size_t(png_length));
+    HGLOBAL asBitmap = bitmap(rgba, width, height, false);
+    HWND owner = nullptr;
+    HRESULT hr = openClipboard(owner);
+    if (FAILED(hr)) {
+        if (asPng) GlobalFree(asPng);
+        if (asBitmap) GlobalFree(asBitmap);
+        return hr;
+    }
+    // As a PNG, for programs that keep the transparency (Office, browsers,
+    // chat apps), and as a bitmap, for every other (Paint: on white).
+    put(RegisterClipboardFormatW(L"PNG"), asPng);
+    hr = put(CF_DIBV5, asBitmap);
+    closeClipboard(owner);
     return hr;
 }
 

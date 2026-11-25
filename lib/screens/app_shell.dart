@@ -90,9 +90,23 @@ class _AppShellState extends State<AppShell> {
   /// What a second copy of Glide was started with, from Windows.
   static const _openChannel = MethodChannel('glide/open');
 
+  /// What's typed in the search box, searched for as it's typed: over the
+  /// grid on a PC, in the bar on a phone (one box at a time, so they share
+  /// this and [_searchFocus], and what's typed stays when the window's made
+  /// narrower or wider).
+  final _search = TextEditingController();
+  final _searchFocus = FocusNode(debugLabel: 'Search');
+
+  /// On a phone, whether the bar's the search box: opened with its button,
+  /// closed with Back. Shown while there's a search, too.
+  var _searching = false;
+
+  bool get _searchShown => _searching || _search.text.isNotEmpty;
+
   @override
   void initState() {
     super.initState();
+    _search.addListener(() => _browser.search(_search.text));
     _browser.addListener(_noteDrive);
     // Finding and sorting a drive's or phone's pictures can take a while:
     // said when it's done.
@@ -281,7 +295,31 @@ class _AppShellState extends State<AppShell> {
   Future<void> _openFromOutside(MethodCall call) async {
     if (call.method != 'open' || !mounted) return;
     setState(() => _tab = _Tab.pictures);
+    // The picture asked for is shown, whatever was searched for.
+    _endSearch();
     await _openPath(call.arguments as String?);
+  }
+
+  /// Ctrl+F, or on a phone the search button: to the search box, with what's
+  /// in it selected, to type over.
+  void _startSearch() {
+    if (!_browsing) return;
+    // Only the phone's bar is opened as a search box. On a PC the box is
+    // over the grid all along, and nothing there would close the bar's
+    // again: made narrower later, the window would show an empty search.
+    if (MediaQuery.sizeOf(context).width < wideLayoutWidth) setState(() => _searching = true);
+    // On a phone, the box is only in the bar from the next frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _searchFocus.requestFocus();
+      _search.selection = TextSelection(baseOffset: 0, extentOffset: _search.text.length);
+    });
+  }
+
+  /// Lets go of the search: every picture's shown again.
+  void _endSearch() {
+    if (_searching) setState(() => _searching = false);
+    _search.clear();
   }
 
   @override
@@ -291,12 +329,18 @@ class _AppShellState extends State<AppShell> {
     _lifecycle?.dispose();
     _browser.removeListener(_noteDrive);
     _browser.dispose();
+    _search.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
   /// Shows [tab]: with [drive], that drive.
   Future<void> _selectTab(_Tab tab, [PhotoLibrary? drive]) async {
+    final another = tab != _tab;
     setState(() => _tab = tab);
+    // Another tab starts with all its pictures (another drive or phone, on
+    // the same tab, keeps the search: see [Browser.query]).
+    if (another) _endSearch();
     // Drives and phones are asked for, so what's opened waits on that; it's
     // only opened if the tab's still showing by then.
     Future<void> openOnTab(Location location) async {
@@ -337,15 +381,25 @@ class _AppShellState extends State<AppShell> {
 
   bool get _browsing => _tab != _Tab.settings;
 
-  Widget _page({ValueChanged<Picture>? onOpen}) => _browsing
-      ? PictureGrid(browser: _browser, onOpen: onOpen)
+  /// The grid, with the search box over it on a PC; on a phone
+  /// ([searchInBar]), it's in the bar instead.
+  Widget _page({ValueChanged<Picture>? onOpen, bool searchInBar = false}) => _browsing
+      ? PictureGrid(
+          browser: _browser,
+          onOpen: onOpen,
+          search: searchInBar ? null : _search,
+          searchFocus: searchInBar ? null : _searchFocus,
+        )
       : const SettingsScreen();
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) =>
-          constraints.maxWidth >= wideLayoutWidth ? _wideLayout() : _narrowLayout(context),
+    return CallbackShortcuts(
+      bindings: {const SingleActivator(LogicalKeyboardKey.keyF, control: true): _startSearch},
+      child: LayoutBuilder(
+        builder: (context, constraints) =>
+            constraints.maxWidth >= wideLayoutWidth ? _wideLayout() : _narrowLayout(context),
+      ),
     );
   }
 
@@ -402,20 +456,54 @@ class _AppShellState extends State<AppShell> {
 
   /// A phone: tabs in a drawer; a picture opens full screen. While picking
   /// pictures (after a long press), the bar says how many, and shares or
-  /// deletes them; Back stops picking.
+  /// deletes them; Back stops picking. While searching, the bar's the search
+  /// box; Back closes it.
   Widget _narrowLayout(BuildContext context) => ListenableBuilder(
     listenable: _browser,
     builder: (context, _) => PopScope(
-      canPop: !_browser.picking,
+      canPop: !_browser.picking && !_searchShown,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _browser.stopPicking();
+        if (didPop) return;
+        if (_browser.picking) {
+          _browser.stopPicking();
+        } else {
+          _endSearch();
+        }
       },
       child: _narrowScaffold(context),
     ),
   );
 
+  /// The bar as a search box: Back (its arrow) closes it, and lets go of
+  /// the search.
+  AppBar _searchBar() => AppBar(
+    leading: IconButton(tooltip: 'Close search', icon: const Icon(Icons.arrow_back_rounded), onPressed: _endSearch),
+    titleSpacing: 0,
+    title: TextField(
+      controller: _search,
+      focusNode: _searchFocus,
+      textInputAction: TextInputAction.search,
+      style: const TextStyle(fontSize: 17),
+      decoration: InputDecoration(
+        hintText: 'Search ${_tab.label.toLowerCase()}',
+        hintStyle: const TextStyle(color: AppColors.textTertiary),
+        border: InputBorder.none,
+      ),
+    ),
+    actions: [
+      ValueListenableBuilder<TextEditingValue>(
+        valueListenable: _search,
+        builder: (context, value, _) => value.text.isEmpty
+            ? const SizedBox.shrink()
+            : IconButton(tooltip: 'Clear', icon: const Icon(Icons.close_rounded), onPressed: _search.clear),
+      ),
+      const SizedBox(width: 4),
+    ],
+  );
+
   Widget _narrowScaffold(BuildContext context) {
     final picking = _browser.picking;
+    final searching = !picking && _browsing && _searchShown;
     return Scaffold(
       appBar: picking
           ? AppBar(
@@ -449,8 +537,17 @@ class _AppShellState extends State<AppShell> {
                 const SizedBox(width: 4),
               ],
             )
-          : AppBar(title: Text(_tab.label)),
-      drawer: picking ? null : NavigationDrawer(
+          : searching
+          ? _searchBar()
+          : AppBar(
+              title: Text(_tab.label),
+              actions: [
+                if (_browsing)
+                  IconButton(tooltip: 'Search', icon: const Icon(Icons.search_rounded), onPressed: _startSearch),
+                const SizedBox(width: 4),
+              ],
+            ),
+      drawer: picking || searching ? null : NavigationDrawer(
         selectedIndex: _tabs.indexOf(_tab),
         onDestinationSelected: (i) {
           Navigator.pop(context);
@@ -467,6 +564,7 @@ class _AppShellState extends State<AppShell> {
         ],
       ),
       body: _page(
+        searchInBar: true,
         onOpen: (picture) {
           Navigator.push(
             context,

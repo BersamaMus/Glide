@@ -42,6 +42,9 @@ are only on the PC.
 - **Every source the same way** *(Windows)*: Pictures, your other drives, a USB
   stick, and an Android phone plugged in by cable. Switch between them with
   chips at the top, and watch slow scans fill in as they go.
+- **Search:** type part of a picture's name, its folder, the camera that took
+  it, its type, or the month it was taken ("venice 2019", "nikon", "march
+  2021"), and see only what matches, as you type. Ctrl+F on Windows.
 - **Filter by camera:** show only what one camera or phone took (a Nikon D40,
   an OPPO Find X9 Pro), or only photos, screenshots, or one file type.
 - **Memories:** what you took on this day in years past.
@@ -54,7 +57,9 @@ are only on the PC.
   together in a collage, or compare two side by side, then and now.
 - **Tidy up** *(Windows)*: rename, copy, move, or send pictures to the Recycle
   Bin, one at a time or many at once, with File Explorer's selection and
-  shortcuts. On Android, pictures can be shared or moved to the phone's trash.
+  shortcuts. Ctrl+C copies them to paste anywhere: into a folder, an email or a
+  chat, or (one picture) into Paint or a document. On Android, pictures can be
+  shared or moved to the phone's trash.
 - **Open with Glide** *(Windows)*: offered for pictures in File Explorer. With
   Glide already open, the picture shows in that window rather than a second one.
 - **Update notices:** says when a new version is out, with a link to download

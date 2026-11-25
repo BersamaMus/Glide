@@ -976,9 +976,22 @@ class _Actions extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final selection = browser.selection;
-    if (selection.isEmpty || browser.copying != null) return const SizedBox(height: 16);
+    // Not while a copy's under way, off a phone or to the clipboard: the
+    // pictures mustn't be moved, renamed or deleted from under it.
+    if (selection.isEmpty || browser.copying != null || browser.copyingToClipboard) {
+      return const SizedBox(height: 16);
+    }
     final single = selection.length == 1 ? selection.single : null;
     final onPhone = selection.any((picture) => picture is PhonePicture);
+    // To the clipboard, to paste anywhere: what Ctrl+C does.
+    final copyButton = Tooltip(
+      message: 'Copy to the clipboard (Ctrl+C)',
+      child: TextButton.icon(
+        onPressed: () => copyToClipboard(context, browser),
+        icon: const Icon(Icons.content_paste_rounded),
+        label: const Text('Copy'),
+      ),
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
       child: Wrap(
@@ -990,6 +1003,7 @@ class _Actions extends StatelessWidget {
               icon: const Icon(Icons.download_rounded),
               label: const Text('Copy to PC…'),
             ),
+          if (onPhone && browser.canCopyToClipboard) copyButton,
           if (browser.canChangeSelection) ...[
             if (single case final LocalPicture picture) ...[
               TextButton.icon(
@@ -1008,6 +1022,7 @@ class _Actions extends StatelessWidget {
                 label: const Text('Show in folder'),
               ),
             ],
+            if (browser.canCopyToClipboard) copyButton,
             TextButton.icon(
               onPressed: () => copySelection(context, browser),
               icon: const Icon(Icons.copy_rounded),
@@ -1064,7 +1079,8 @@ class _Actions extends StatelessWidget {
   }
 }
 
-/// A copy off a phone under way.
+/// A copy off a phone under way; or the selection being read to put on the
+/// clipboard, which a RAW file can take a second or two over.
 class _Progress extends StatelessWidget {
   const _Progress({required this.browser});
 
@@ -1073,6 +1089,19 @@ class _Progress extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final progress = browser.copying;
+    if (progress == null && browser.copyingToClipboard) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Copying to the clipboard…', style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 8),
+            const LinearProgressIndicator(),
+          ],
+        ),
+      );
+    }
     if (progress == null) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),

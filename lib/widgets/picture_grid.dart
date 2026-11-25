@@ -19,11 +19,22 @@ import 'picture_actions.dart';
 ///
 /// Pictures are selected as in File Explorer: click, Ctrl+click, Shift+click,
 /// the arrow keys (with Shift), Home and End, Ctrl+A, and Esc. Delete
-/// deletes them, F2 renames, E edits.
+/// deletes them, F2 renames, E edits, Ctrl+C copies them to the clipboard.
+///
+/// With [search], the bar has a search box (on a phone, it's in the bar
+/// above instead): Enter or the down arrow goes from it to what it found,
+/// and Esc clears it.
 class PictureGrid extends StatefulWidget {
-  const PictureGrid({super.key, required this.browser, this.onOpen});
+  const PictureGrid({super.key, required this.browser, this.onOpen, this.search, this.searchFocus});
 
   final Browser browser;
+
+  /// What's typed in the search box, which the app hands on to
+  /// [Browser.search]; null for no search box here.
+  final TextEditingController? search;
+
+  /// The search box's focus: Ctrl+F asks for it.
+  final FocusNode? searchFocus;
 
   /// On a phone, where there's no preview pane beside the grid: opens the
   /// picture tapped on its own page.
@@ -93,6 +104,9 @@ class _PictureGridState extends State<PictureGrid> {
 
   KeyEventResult _onKey(FocusNode _, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
+    // Typed into the search box (in the bar, inside the grid): its own.
+    // Otherwise E would edit, Delete delete, and Ctrl+A select pictures.
+    if (widget.searchFocus?.hasFocus ?? false) return KeyEventResult.ignored;
     final keys = HardwareKeyboard.instance;
     final shift = keys.isShiftPressed;
     void move(int by) {
@@ -119,6 +133,8 @@ class _PictureGridState extends State<PictureGrid> {
         _reveal();
       case LogicalKeyboardKey.keyA when keys.isControlPressed:
         browser.selectAll();
+      case LogicalKeyboardKey.keyC when keys.isControlPressed && browser.canCopyToClipboard:
+        copyToClipboard(context, browser);
       case LogicalKeyboardKey.escape:
         browser.clearSelection();
       case LogicalKeyboardKey.delete when browser.canDelete:
@@ -131,6 +147,16 @@ class _PictureGridState extends State<PictureGrid> {
         return KeyEventResult.ignored;
     }
     return KeyEventResult.handled;
+  }
+
+  /// Done typing a search: back to the pictures, with [toResults] (Enter,
+  /// or the down arrow) the first it found focused if none is, so the
+  /// arrow keys carry on from there.
+  void _leaveSearch({required bool toResults}) {
+    _focus.requestFocus();
+    if (!toResults) return;
+    if (browser.focused == null) browser.focusAt(0);
+    _reveal();
   }
 
   // --- Months ---------------------------------------------------------------
@@ -241,7 +267,19 @@ class _PictureGridState extends State<PictureGrid> {
                 slivers: [
                   // Stays put while the pictures scroll under it.
                   PinnedHeaderSliver(
-                    child: _Header(key: _headerKey, browser: browser, metrics: m),
+                    child: _Header(
+                      key: _headerKey,
+                      browser: browser,
+                      metrics: m,
+                      search: switch ((widget.search, widget.searchFocus)) {
+                        (final controller?, final focusNode?) => _SearchField(
+                          controller: controller,
+                          focusNode: focusNode,
+                          onDone: _leaveSearch,
+                        ),
+                        _ => null,
+                      },
+                    ),
                   ),
                   ..._content(context),
                   const SliverPadding(padding: EdgeInsets.only(bottom: 24)),
@@ -268,6 +306,20 @@ class _PictureGridState extends State<PictureGrid> {
     if (browser.pictures.isEmpty) {
       // Still looking, with nothing found yet: the header says so.
       if (browser.work != null) return const [];
+      // There are pictures; the search finds none of them.
+      if (browser.total > 0 && browser.query.trim().isNotEmpty) {
+        return [
+          SliverFillRemaining(
+            child: MessageView(
+              icon: Icons.search_off_rounded,
+              text:
+                  'Nothing here matches “${browser.query.trim()}”.\n'
+                  'Search by a picture\'s name, its folder, the camera that took it, '
+                  'its type, or the month it was taken (“March 2021”).',
+            ),
+          ),
+        ];
+      }
       return [
         SliverFillRemaining(
           child: MessageView(
@@ -400,10 +452,13 @@ class _Section {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({super.key, required this.browser, required this.metrics});
+  const _Header({super.key, required this.browser, required this.metrics, this.search});
 
   final Browser browser;
   final _Metrics metrics;
+
+  /// The search box, beside the title; null for none.
+  final Widget? search;
 
   @override
   Widget build(BuildContext context) {
@@ -426,7 +481,20 @@ class _Header extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // On a phone, the bar above already says where this is.
-            if (!metrics.compact) Text(location.title, style: text.headlineSmall, overflow: TextOverflow.ellipsis),
+            if (!metrics.compact)
+              Row(
+                children: [
+                  Expanded(child: Text(location.title, style: text.headlineSmall, overflow: TextOverflow.ellipsis)),
+                  if (search case final search?) ...[
+                    const SizedBox(width: 16),
+                    SizedBox(width: 260, child: search),
+                  ],
+                ],
+              )
+            // A narrow grid beside the preview has no bar above it: the
+            // search box goes on a row of its own.
+            else if (search case final search?)
+              Padding(padding: const EdgeInsets.fromLTRB(0, 8, 16, 8), child: search),
             Text(
               [
                 location.subtitle,
@@ -452,6 +520,65 @@ class _Header extends StatelessWidget {
             else
               _Progress(browser: browser),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Looks through the pictures here, by name, folder, camera, kind, type and
+/// month (see [Picture.matches]), as it's typed: in the bar over the grid.
+/// Enter or the down arrow goes to what it found ([onDone], toResults);
+/// Esc clears it, or if it's clear, goes back to the pictures.
+class _SearchField extends StatelessWidget {
+  const _SearchField({required this.controller, required this.focusNode, required this.onDone});
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final void Function({required bool toResults}) onDone;
+
+  @override
+  Widget build(BuildContext context) {
+    final round = BorderRadius.circular(AppRadius.large);
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): () =>
+            controller.text.isEmpty ? onDone(toResults: false) : controller.clear(),
+        const SingleActivator(LogicalKeyboardKey.arrowDown): () => onDone(toResults: true),
+      },
+      child: ValueListenableBuilder<TextEditingValue>(
+        valueListenable: controller,
+        builder: (context, value, _) => TextField(
+          controller: controller,
+          focusNode: focusNode,
+          textInputAction: TextInputAction.search,
+          onSubmitted: (_) => onDone(toResults: true),
+          style: const TextStyle(fontSize: 14),
+          decoration: InputDecoration(
+            isDense: true,
+            hintText: 'Search',
+            hintStyle: const TextStyle(color: AppColors.textTertiary),
+            prefixIcon: const Icon(Icons.search_rounded, size: 20, color: AppColors.textSecondary),
+            prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 36),
+            suffixIcon: value.text.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'Clear (Esc)',
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    color: AppColors.textSecondary,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: controller.clear,
+                  ),
+            filled: true,
+            fillColor: AppColors.surfaceHigh,
+            contentPadding: const EdgeInsets.symmetric(vertical: 10),
+            border: OutlineInputBorder(borderRadius: round, borderSide: BorderSide.none),
+            enabledBorder: OutlineInputBorder(borderRadius: round, borderSide: BorderSide.none),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: round,
+              borderSide: const BorderSide(color: AppColors.accent),
+            ),
+          ),
         ),
       ),
     );

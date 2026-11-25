@@ -42,6 +42,14 @@ String pictureType(String name) => switch (p.extension(name).toLowerCase()) {
   _ => 'RAW',
 };
 
+/// What else a [pictureType] is called, so a search for it finds them: a
+/// .jpg is a JPEG too.
+const _otherTypeNames = {
+  'JPG': ['JPEG'],
+  'HEIC': ['HEIF'],
+  'TIFF': ['TIF'],
+};
+
 /// What a picture is, by its name and the folder it's in: a screenshot
 /// (Windows', Android's, an iPhone's or a Mac's), or a photo (or any other
 /// picture). The grid's second row of filter chips. Only the picture's own
@@ -51,13 +59,18 @@ String pictureType(String name) => switch (p.extension(name).toLowerCase()) {
 String pictureKind(Picture picture) {
   final name = picture.name.toLowerCase();
   if (_screenshotNames.any(name.contains)) return 'Screenshots';
-  final folder = switch (picture) {
-    LocalPicture(:final file) => p.basename(p.dirname(file.path)),
-    PhonePicture(:final folder) => p.basename(folder),
-  }.toLowerCase();
+  final folder = _folderName(picture).toLowerCase();
   if (folder.contains('screenshot') || folder.contains('screen shot')) return 'Screenshots';
   return 'Photos';
 }
+
+/// The name of the folder a picture's in ("Venice"), not the whole path:
+/// every picture's under C:\Users\you\Pictures, or on the same phone, so a
+/// search for "pictures", "users" or the phone's name would find them all.
+String _folderName(Picture picture) => switch (picture) {
+  LocalPicture(:final file) => p.basename(p.dirname(file.path)),
+  PhonePicture(:final folder) => p.basename(folder),
+};
 
 /// What screenshots are called, in a few languages.
 const _screenshotNames = [
@@ -254,6 +267,35 @@ sealed class Picture {
   /// listing found out: null if it doesn't say, or it hasn't been read yet.
   /// The grid's camera chips.
   String? get camera => null;
+
+  /// What it's found by in a search (see [matches]): its name, the folder
+  /// it's in, the camera that took it, photo or screenshot, its type, and
+  /// the month it's under ("March 2021"). Each on a line of its own, so a
+  /// word's found in one of them, not across two. Put together the first
+  /// time it's searched, and kept: a search goes through every picture
+  /// again each time a scan's listed (every second), and each key typed.
+  /// (A picture whose camera's read later is a new picture, so this is
+  /// never out of date.)
+  late final String _searchText = [
+    name,
+    _folderName(this),
+    camera ?? '',
+    kind,
+    type,
+    ...?_otherTypeNames[type],
+    monthLabel(_month),
+  ].join('\n').toLowerCase();
+
+  /// Whether it's found by every word of a search ([searchWords]): each
+  /// somewhere in its name, folder, camera, kind, type or month, in any
+  /// order. "venice 2019" finds a photo in "Venice" taken in 2019, or one
+  /// called "venice_2019.jpg".
+  bool matches(List<String> words) => words.every(_searchText.contains);
+
+  /// What a search for [text] looks for: its words, lowercased. None for a
+  /// search of nothing, which finds everything.
+  static List<String> searchWords(String text) =>
+      text.toLowerCase().split(RegExp(r'\s+')).where((word) => word.isNotEmpty).toList();
 
   /// What it says about itself (camera, settings, where it was taken), for
   /// the picture previewed; null where that can't be read. On a phone, the

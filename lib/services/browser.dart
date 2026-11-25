@@ -22,12 +22,37 @@ class Browser extends ChangeNotifier {
 
   Location location;
 
-  /// The pictures shown: all of [location]'s, or with a [kind], [cameras] or
-  /// [types] chosen, those of them.
+  /// The pictures shown: all of [location]'s, or those a [search] finds, and
+  /// with a [kind], [cameras] or [types] chosen, those of them.
   List<Picture> pictures = const [];
 
   /// All of [location]'s pictures.
   List<Picture> _all = const [];
+
+  /// Those of them the [search] finds: all of them, with none.
+  List<Picture> _found = const [];
+
+  /// What's being searched for, as it was typed: empty for nothing. Kept
+  /// when another drive or phone is opened (to look for the same there),
+  /// and let go of by the app when another tab is.
+  String query = '';
+
+  /// [query]'s words: see [Picture.searchWords].
+  List<String> _words = const [];
+
+  /// Shows only the pictures that [text] finds (see [Picture.matches]), or
+  /// with none, all of them again. The chips count what it finds; what's
+  /// selected and now hidden is let go.
+  void search(String text) {
+    if (text == query) return;
+    query = text;
+    final words = Picture.searchWords(text);
+    if (listEquals(words, _words)) return; // a space typed, say
+    _words = words;
+    _setAll(_all);
+    _keepSelectionShown();
+    notifyListeners();
+  }
 
   /// The kinds of picture (JPG, PNG, GIF...) shown; none chosen, all are.
   final types = <String>{};
@@ -52,7 +77,7 @@ class Browser extends ChangeNotifier {
   /// camera took them (or haven't been read yet).
   int unknownCameraCount = 0;
 
-  /// How many pictures [location] has, whatever the filter.
+  /// How many pictures [location] has, whatever the search and the filter.
   int get total => _all.length;
 
   /// Photos or screenshots (see [pictureKind]): the one shown, or null for
@@ -65,12 +90,20 @@ class Browser extends ChangeNotifier {
   /// leaving the grid empty with no filter to be seen.
   List<(String, int)> kindCounts = const [];
 
-  /// The location's pictures are now [all]: shown as the filter has it. The
-  /// selection's left alone (see [refresh] and [toggleType]).
+  /// The location's pictures are now [all]: shown as the search and the
+  /// filter have them. The selection's left alone (see [refresh] and
+  /// [toggleType]).
   void _setAll(List<Picture> all) {
     _all = all;
+    final words = _words;
+    _found = words.isEmpty
+        ? all
+        : [
+            for (final picture in all)
+              if (picture.matches(words)) picture,
+          ];
     final kinds = <String, int>{};
-    for (final picture in all) {
+    for (final picture in _found) {
       kinds[picture.kind] = (kinds[picture.kind] ?? 0) + 1;
     }
     kindCounts = [
@@ -80,11 +113,12 @@ class Browser extends ChangeNotifier {
     _filter();
   }
 
-  /// Works out [pictures]: the photos or screenshots ([kind]), of those the
-  /// ones from the [cameras] chosen, and of those the [types] chosen. Each
-  /// row of chips counts what the row before leaves.
+  /// Works out [pictures]: of those the search finds, the photos or
+  /// screenshots ([kind]), of those the ones from the [cameras] chosen, and
+  /// of those the [types] chosen. Each row of chips counts what the row
+  /// before leaves.
   void _filter() {
-    final ofKind = kind == null ? _all : [for (final picture in _all) if (picture.kind == kind) picture];
+    final ofKind = kind == null ? _found : [for (final picture in _found) if (picture.kind == kind) picture];
 
     final byCamera = <String, int>{for (final camera in cameras) camera: 0};
     var unknown = 0;
@@ -460,9 +494,14 @@ class Browser extends ChangeNotifier {
   // --- Changing files -------------------------------------------------------
 
   /// Whether the selection can be renamed, moved and deleted: pictures on
-  /// this PC. A phone's can only be copied off it, for now.
+  /// this PC. A phone's can only be copied off it, for now. Not while
+  /// they're put on the clipboard: one moved before its RAW's decoded would
+  /// be put there by the path it's no longer at.
   bool get canChangeSelection =>
-      Platform.isWindows && _selected.isNotEmpty && selection.every((picture) => picture is LocalPicture);
+      Platform.isWindows &&
+      _selected.isNotEmpty &&
+      !copyingToClipboard &&
+      selection.every((picture) => picture is LocalPicture);
 
   /// Whether the selection's all from the phone's own gallery, on Android:
   /// those can be shared and deleted (to Android's trash).
@@ -573,7 +612,7 @@ class Browser extends ChangeNotifier {
     copying = (done: 0, total: chosen.length);
     notifyListeners();
     for (final (i, picture) in chosen.indexed) {
-      final bytes = await Phones.read(picture.phone.serial, picture.entry.id);
+      final bytes = await readFromPhone(picture.phone.serial, picture.entry.id);
       final file = await File(await _freeName(folder, picture.name)).writeAsBytes(bytes, flush: true);
       written.add(file.path);
       if (picture.entry.modified case final modified?) await file.setLastModified(modified);
@@ -582,6 +621,91 @@ class Browser extends ChangeNotifier {
     }
     copying = null;
     notifyListeners();
+  }
+
+  /// Reads a picture off a phone, whole: Windows' WPD, or a stand-in in tests.
+  @visibleForTesting
+  static Future<Uint8List> Function(String serial, String objectId) readFromPhone = Phones.read;
+
+  // --- The clipboard --------------------------------------------------------
+
+  /// Whether the selection can be copied to the clipboard (Ctrl+C): on
+  /// Windows, pictures on this PC or on a phone. Not while a copy off a
+  /// phone ("Copy to PC…") is under way: both would count in [copying].
+  bool get canCopyToClipboard =>
+      Platform.isWindows && _selected.isNotEmpty && !copyingToClipboard && copying == null;
+
+  /// Whether the selection's being put on the clipboard: read and decoded
+  /// (a RAW file can take a second or two), or copied off a phone first.
+  var copyingToClipboard = false;
+
+  /// Puts the selection on the clipboard (with [putOnClipboard]) as File
+  /// Explorer copies files, so Ctrl+V pastes them into a folder, an email
+  /// or a chat. One picture's put there as a picture too, for what takes
+  /// pictures rather than files (Paint, a document). A phone's are copied
+  /// off it first, into a folder of the app's own in Windows' temporary
+  /// files, as there's no file on this PC to hand over. Returns what to tell
+  /// the user: that it's done, or why it couldn't be.
+  Future<String?> copyToClipboard() async {
+    final chosen = selection;
+    if (!canCopyToClipboard) return null;
+    copyingToClipboard = true;
+    notifyListeners();
+    final paths = [for (final picture in chosen.whereType<LocalPicture>()) picture.file.path];
+    final onPhone = chosen.whereType<PhonePicture>().toList();
+    try {
+      if (onPhone.isNotEmpty) await _copyOffPhone(onPhone, (await _clipboardFolder()).path, paths);
+      await putOnClipboard(
+        paths,
+        picture: paths.length == 1 ? paths.single : null,
+        maxSize: clipboardPictureSize,
+      );
+    } on NativeImagingException catch (e) {
+      return 'Couldn\'t copy ${_describe(chosen)} ($e).';
+    } on FileSystemException catch (e) {
+      return 'Couldn\'t copy ${_describe(chosen)}: ${e.osError?.message ?? e.message}';
+    } on Exception catch (e) {
+      // A phone unplugged part way, say: still told, as Ctrl+C doesn't wait
+      // to hear how it went.
+      return 'Couldn\'t copy ${_describe(chosen)} ($e).';
+    } finally {
+      // Only this copy's own count off a phone: no other's can be under way,
+      // as [canCopyToClipboard] waits for it.
+      if (onPhone.isNotEmpty) copying = null;
+      copyingToClipboard = false;
+      notifyListeners();
+    }
+    return chosen.length == 1
+        ? 'Copied ${chosen.single.name}. Paste it into a folder, a chat or a document.'
+        : 'Copied ${chosen.length} pictures. Paste them into a folder, an email or a chat.';
+  }
+
+  /// Puts files on the clipboard: Windows', or a stand-in in tests.
+  @visibleForTesting
+  static Future<void> Function(List<String> paths, {String? picture, int maxSize}) putOnClipboard =
+      NativeImaging.copyFiles;
+
+  /// The longest side a picture's put on the clipboard at, as a picture:
+  /// a 45-megapixel photo whole would be 180 MB of bitmap, held twice over
+  /// while it's handed to Windows. At 4096 it's at most 64 MB (45 MB for a
+  /// 3:2 photo), plenty for Paint or a document.
+  static const clipboardPictureSize = 4096;
+
+  /// Where pictures copied off a phone for the clipboard go: emptied each
+  /// time, as the clipboard only holds the last of them. (One that's open
+  /// somewhere is left; a picture of the same name then takes another.)
+  static Future<Directory> _clipboardFolder() async {
+    final folder = Directory(p.join(Directory.systemTemp.path, 'Glide clipboard'));
+    if (await folder.exists()) {
+      await for (final entry in folder.list()) {
+        try {
+          await entry.delete(recursive: true);
+        } on FileSystemException {
+          // In use: left.
+        }
+      }
+    }
+    return folder.create(recursive: true);
   }
 
   /// Renames [from] to [to], trying a few times over half a second or so:

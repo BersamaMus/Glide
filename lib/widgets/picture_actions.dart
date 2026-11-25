@@ -10,6 +10,7 @@ import '../screens/editor_screen.dart';
 import '../screens/sticker_screen.dart';
 import '../services/browser.dart';
 import '../services/places.dart';
+import '../theme.dart';
 
 // What can be done to the selection, from the preview pane's buttons and the
 // keyboard alike, telling the user how it went: and what can be made of it
@@ -37,6 +38,38 @@ Future<void> copySelection(BuildContext context, Browser browser, {bool move = f
   if (await browser.copySelection(folder, move: move) case final message?) {
     messenger.showSnackBar(SnackBar(content: Text(message)));
   }
+}
+
+/// Copies the selection to the clipboard (Ctrl+C, or the Copy button), and
+/// says so with a tick, or why it couldn't. While a phone's pictures are
+/// copied off it first, the preview pane shows how far along that is.
+Future<void> copyToClipboard(BuildContext context, Browser browser) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final message = await browser.copyToClipboard();
+  if (message == null) return;
+  final copied = message.startsWith('Copied');
+  messenger
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            if (copied) ...[
+              const DecoratedBox(
+                decoration: BoxDecoration(color: AppColors.accent, shape: BoxShape.circle),
+                child: Padding(
+                  padding: EdgeInsets.all(2),
+                  child: Icon(Icons.check_rounded, size: 16, color: AppColors.onAccent),
+                ),
+              ),
+              const SizedBox(width: 12),
+            ],
+            Expanded(child: Text(message)),
+          ],
+        ),
+        duration: const Duration(seconds: 3),
+      ),
+    );
 }
 
 /// Whether the focused picture can be edited: one on this PC or in the

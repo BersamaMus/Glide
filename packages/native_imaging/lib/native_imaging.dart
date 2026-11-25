@@ -562,6 +562,26 @@ abstract final class NativeImaging {
       });
     });
   }
+
+  /// Puts the files at [paths] on the clipboard as File Explorer copies
+  /// them: Ctrl+V pastes them into a folder, an email or a chat. With
+  /// [picture] (one of them), the picture itself too, upright, with neither
+  /// side over [maxSize] (0 for its own size), for what takes pictures
+  /// rather than files (Paint, a document). If it can't be read, the files
+  /// are copied all the same.
+  ///
+  /// It's not given up on after a while, as the others are: the native call
+  /// would go on regardless, and put the files on the clipboard after the
+  /// user had been told it failed, over whatever they'd copied since.
+  static Future<void> copyFiles(List<String> paths, {String? picture, int maxSize = 0}) => Isolate.run(() {
+    using((arena) {
+      final array = arena<Pointer<Utf16>>(paths.length);
+      for (final (i, path) in paths.indexed) {
+        array[i] = path.toNativeUtf16(allocator: arena);
+      }
+      _check(_copyFiles(array, paths.length, picture?.toNativeUtf16(allocator: arena) ?? nullptr, maxSize));
+    });
+  });
 }
 
 /// What a drive's plugged into.
@@ -898,6 +918,12 @@ final _copyPicture = _lib
       Int32 Function(Pointer<Uint8>, Int32, Int32, Pointer<Uint8>, Int64),
       int Function(Pointer<Uint8>, int, int, Pointer<Uint8>, int)
     >('ni_copy_picture');
+
+final _copyFiles = _lib
+    .lookupFunction<
+      Int32 Function(Pointer<Pointer<Utf16>>, Int32, Pointer<Utf16>, Int32),
+      int Function(Pointer<Pointer<Utf16>>, int, Pointer<Utf16>, int)
+    >('ni_copy_files');
 
 final _free = _lib.lookupFunction<Void Function(Pointer<Void>), void Function(Pointer<Void>)>('ni_free');
 

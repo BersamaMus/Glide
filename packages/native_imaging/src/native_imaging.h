@@ -82,6 +82,14 @@ NI_EXPORT int32_t ni_subject_mask(const wchar_t *path, int32_t *width, int32_t *
 NI_EXPORT int32_t ni_copy_picture(const uint8_t *rgba, int32_t width, int32_t height, const uint8_t *png,
                                   int64_t png_length);
 
+// Puts the count files at paths on the clipboard as File Explorer copies
+// them (Ctrl+V pastes them into a folder, an email, a chat). With picture
+// (one of them), the picture itself too, decoded upright with neither side
+// over max_size (0 for its own size), for programs that take pictures
+// rather than files (Paint, a document); if it can't be read, the files are
+// copied all the same.
+NI_EXPORT int32_t ni_copy_files(const wchar_t **paths, int32_t count, const wchar_t *picture, int32_t max_size);
+
 // When each picture was taken, from its metadata (EXIF's DateTimeOriginal,
 // or its equivalent in HEIC and RAW files), as milliseconds since 1970 UTC.
 // states[i] says how it went: 0 found (in taken[i]), 1 none recorded (or the
