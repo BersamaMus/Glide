@@ -23,6 +23,8 @@ const wideLayoutWidth = 840.0;
 
 enum _Tab {
   pictures('Pictures', Icons.photo_library_outlined, Icons.photo_library_rounded),
+  favourites('Favourites', Icons.favorite_border_rounded, Icons.favorite_rounded),
+  albums('Albums', Icons.photo_album_outlined, Icons.photo_album_rounded),
   drives('Drives', Icons.storage_outlined, Icons.storage_rounded),
   memories('Memories', Icons.auto_awesome_outlined, Icons.auto_awesome_rounded),
   external('External', Icons.usb_outlined, Icons.usb_rounded),
@@ -54,24 +56,33 @@ class _AppShellState extends State<AppShell> {
   /// every picture in its gallery.
   static Location get _home => Platform.isAndroid ? const AndroidGallery() : PhotoLibrary(picturesFolder);
 
+  /// What the Favourites tab shows: on a phone, its gallery's; on a PC,
+  /// wherever they are.
+  static Location get _favourites =>
+      Platform.isAndroid ? const FavouritePictures(within: AndroidGallery()) : const FavouritePictures();
+
   /// On a phone, back in the app: the gallery's looked at again, for access
   /// given in Settings meanwhile, or pictures taken.
   AppLifecycleListener? _lifecycle;
 
-  /// Drives and phones are Windows' (Android's are on the way). Memories is
-  /// on both: on a phone, of the gallery's pictures; on a PC, of those in
-  /// Pictures and on the drives inside it.
+  /// Drives and phones are Windows' (Android's are on the way). Favourites,
+  /// Albums and Memories are on both: on a phone, of the gallery's pictures;
+  /// on a PC, of those in Pictures and on the drives inside it.
   static final _tabs = [
     for (final tab in _Tab.values)
-      if (Platform.isWindows || const {_Tab.pictures, _Tab.memories, _Tab.settings}.contains(tab)) tab,
+      if (Platform.isWindows ||
+          const {_Tab.pictures, _Tab.favourites, _Tab.albums, _Tab.memories, _Tab.settings}.contains(tab))
+        tab,
   ];
 
   /// The tabs down the side, with Settings kept apart at the bottom.
   static final _railTabs = _tabs.where((t) => t != _Tab.settings).toList();
 
-  /// The drive the Drives tab, and the External tab, showed last.
+  /// The drive the Drives tab, and the External tab, showed last; and the
+  /// album the Albums tab did.
   PhotoLibrary? _lastInternal;
   PhotoLibrary? _lastExternal;
+  AlbumKind? _lastAlbum;
 
   /// What's plugged in, by what tells each apart (a drive's root and label,
   /// a phone's serial): counted on the External and Phone tabs, and said
@@ -107,7 +118,7 @@ class _AppShellState extends State<AppShell> {
   void initState() {
     super.initState();
     _search.addListener(() => _browser.search(_search.text));
-    _browser.addListener(_noteDrive);
+    _browser.addListener(_noteLast);
     // Finding and sorting a drive's or phone's pictures can take a while:
     // said when it's done.
     _browser.onFinished = (message) {
@@ -117,7 +128,7 @@ class _AppShellState extends State<AppShell> {
     if (Platform.isAndroid) {
       _lifecycle = AppLifecycleListener(
         onResume: () {
-          if (_browser.location case AndroidGallery() || Memories()) {
+          if (_browser.location case AndroidGallery() || Memories() || FavouritePictures() || Album()) {
             // Pictures may have been taken or deleted meanwhile.
             _browser.location.forget();
             _browser.refresh();
@@ -154,13 +165,17 @@ class _AppShellState extends State<AppShell> {
     );
   }
 
-  void _noteDrive() {
-    if (_browser.location case PhotoLibrary(:final drive?) && final library) {
-      if (drive.external) {
-        _lastExternal = library;
-      } else {
-        _lastInternal = library;
-      }
+  void _noteLast() {
+    switch (_browser.location) {
+      case PhotoLibrary(:final drive?) && final library:
+        if (drive.external) {
+          _lastExternal = library;
+        } else {
+          _lastInternal = library;
+        }
+      case Album(:final kind):
+        _lastAlbum = kind;
+      default:
     }
   }
 
@@ -327,7 +342,7 @@ class _AppShellState extends State<AppShell> {
     if (Platform.isWindows) _openChannel.setMethodCallHandler(null);
     _watcher?.cancel();
     _lifecycle?.dispose();
-    _browser.removeListener(_noteDrive);
+    _browser.removeListener(_noteLast);
     _browser.dispose();
     _search.dispose();
     _searchFocus.dispose();
@@ -343,17 +358,33 @@ class _AppShellState extends State<AppShell> {
     if (another) _endSearch();
     // Drives and phones are asked for, so what's opened waits on that; it's
     // only opened if the tab's still showing by then.
-    Future<void> openOnTab(Location location) async {
-      if (mounted && _tab == tab) await _browser.open(location);
+    Future<void> openOnTab(Location location, {bool lookAgain = true}) async {
+      if (mounted && _tab == tab) await _browser.open(location, lookAgain: lookAgain);
     }
 
     switch (tab) {
       case _Tab.pictures:
         await _browser.open(_home);
+      case _Tab.favourites:
+        await _browser.open(_favourites);
+      case _Tab.albums:
+        // On a phone, its gallery's. On a PC, Downloads is looked through
+        // on its own as well as with its drive, as it's quick: what's in it
+        // shows before the drive's been.
+        final from = [
+          _home,
+          if (Platform.isWindows) ...[PhotoLibrary(downloadsFolder), ...await _internalDrives()],
+        ];
+        // Opened at once on the one looked at last (or the camera's), so the
+        // tab shows it's looking; if that has none once they've been looked
+        // through, the first that has, without looking through them again.
+        final album = Album(_lastAlbum ?? AlbumKind.camera, from);
+        await openOnTab(album);
+        if (album.instead case final instead? when _browser.location == album && _browser.pictures.isEmpty) {
+          await openOnTab(instead, lookAgain: false);
+        }
       case _Tab.memories:
-        // Known from the last look, as on the Drives tab.
-        final drives = _devicesKnown ? _internals : await PhotoLibrary.drives(external: false);
-        await openOnTab(Memories([_home, ...drives]));
+        await openOnTab(Memories([_home, ...await _internalDrives()]));
       case _Tab.drives || _Tab.external:
         final external = tab == _Tab.external;
         // Known from the last look (a few seconds ago), so the tab's shown
@@ -378,6 +409,11 @@ class _AppShellState extends State<AppShell> {
         _browser.clearSelection();
     }
   }
+
+  /// The drives inside this PC: known from the last look, as on the Drives
+  /// tab.
+  Future<List<PhotoLibrary>> _internalDrives() async =>
+      _devicesKnown ? _internals : await PhotoLibrary.drives(external: false);
 
   bool get _browsing => _tab != _Tab.settings;
 
@@ -503,6 +539,7 @@ class _AppShellState extends State<AppShell> {
 
   Widget _narrowScaffold(BuildContext context) {
     final picking = _browser.picking;
+    final favourite = picking && _browser.selectionIsFavourite;
     final searching = !picking && _browsing && _searchShown;
     return Scaffold(
       appBar: picking
@@ -512,8 +549,23 @@ class _AppShellState extends State<AppShell> {
                 icon: const Icon(Icons.close_rounded),
                 onPressed: _browser.stopPicking,
               ),
-              title: Text('${_browser.selectedCount} selected'),
+              // Beside up to five buttons on a phone's width: made smaller to
+              // fit, rather than cut short ("2 selec…").
+              titleSpacing: 0,
+              title: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: AlignmentDirectional.centerStart,
+                child: Text('${_browser.selectedCount} selected'),
+              ),
               actions: [
+                if (_browser.canFavourite)
+                  IconButton(
+                    tooltip: favourite ? 'Remove from favourites' : 'Add to favourites',
+                    icon: favourite
+                        ? const Icon(Icons.favorite_rounded, color: AppColors.accent)
+                        : const Icon(Icons.favorite_border_rounded),
+                    onPressed: _browser.toggleFavourite,
+                  ),
                 if (canCompare(_browser))
                   IconButton(
                     tooltip: 'Compare',

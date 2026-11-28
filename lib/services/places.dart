@@ -10,11 +10,14 @@ import 'package:flutter/services.dart' show PlatformException;
 import 'package:native_imaging/native_imaging.dart';
 import 'package:path/path.dart' as p;
 
+import 'favourites.dart';
 import 'gallery.dart';
 import 'library_index.dart';
 import 'picture_image.dart';
 
+part 'albums.dart';
 part 'android_gallery.dart';
+part 'favourite_pictures.dart';
 part 'memories.dart';
 part 'phone_photos.dart';
 part 'photo_library.dart';
@@ -262,6 +265,15 @@ sealed class Picture {
 
   /// JPG, PNG, RAW...: see [pictureType]. Worked out once, likewise.
   late final String type = pictureType(name);
+
+  /// The albums it's in: see [albumsOf]. Worked out once, likewise, as the
+  /// Albums tab asks of every picture on every listing.
+  late final List<AlbumKind> albums = albumsOf(this);
+
+  /// What tells it apart from another source's copy of it: its [id], on
+  /// Windows whatever its case (a picture in Pictures is found again on its
+  /// drive). Worked out once, likewise.
+  late final String _sameKey = Platform.isWindows ? id.toLowerCase() : id;
 
   /// The camera or phone it was taken on (see [cameraName]), where the
   /// listing found out: null if it doesn't say, or it hasn't been read yet.
@@ -525,20 +537,26 @@ sealed class Location {
 }
 
 /// The user's Pictures folder, where the app starts.
-final String picturesFolder = _findPicturesFolder();
+final String picturesFolder = _findFolder('My Pictures', 'Pictures', onAndroid: 'Pictures');
 
-String _findPicturesFolder() {
-  // Shared storage on Android; reading it needs the media permission.
-  if (!Platform.isWindows) return '/storage/emulated/0/Pictures';
+/// The user's Downloads folder: an album of its own, and on a PC looked
+/// through for the Albums tab.
+final String downloadsFolder = _findFolder('{374DE290-123F-4565-9164-39C4925E467B}', 'Downloads', onAndroid: 'Download');
+
+/// One of the user's folders: on Windows, where Windows says its folder
+/// [value] is, else [name] in their profile; on Android, [onAndroid] in the
+/// phone's shared storage (reading it needs the media permission).
+String _findFolder(String value, String name, {required String onAndroid}) {
+  if (!Platform.isWindows) return '/storage/emulated/0/$onAndroid';
   final profile = Platform.environment['USERPROFILE'] ?? r'C:\';
-  // Pictures may have been moved (OneDrive backup moves it into OneDrive),
+  // It may have been moved (OneDrive backup moves Pictures into OneDrive),
   // so ask Windows where it is.
   try {
     final result = Process.runSync('reg', [
       'query',
       r'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders',
       '/v',
-      'My Pictures',
+      value,
     ]);
     final match = RegExp(r'REG_(?:EXPAND_)?SZ\s+(.+)').firstMatch(result.stdout as String);
     if (match != null) {
@@ -551,5 +569,5 @@ String _findPicturesFolder() {
   } on ProcessException {
     // Fall back to the usual place.
   }
-  return p.join(profile, 'Pictures');
+  return p.join(profile, name);
 }

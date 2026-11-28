@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:native_imaging/native_imaging.dart';
 import 'package:path/path.dart' as p;
 
+import 'favourites.dart';
 import 'gallery.dart';
 import 'places.dart';
 
@@ -244,7 +245,10 @@ class Browser extends ChangeNotifier {
   /// Counts listings, so a slow one that's been overtaken is dropped.
   int _generation = 0;
 
-  Future<void> open(Location to) async {
+  /// Shows [to]'s pictures, with nothing selected and no filters on.
+  /// With [lookAgain] false, it isn't told to look again first: for one
+  /// whose pictures were only just listed (another album of the same).
+  Future<void> open(Location to, {bool lookAgain = true}) async {
     location = to;
     focused = null;
     picking = false;
@@ -263,7 +267,7 @@ class Browser extends ChangeNotifier {
     notifyListeners();
     // Looked through again: what's changed since is found (behind what was
     // found last time, for a library).
-    to.forget();
+    if (lookAgain) to.forget();
     await refresh();
   }
 
@@ -547,13 +551,21 @@ class Browser extends ChangeNotifier {
     }
     final where = _inGallery ? 'the trash' : 'the Recycle Bin';
     location.forget(gone: paths);
-    final first = pictures.indexWhere((picture) => picture.id == doomed.first.id);
+    _drop(doomed);
+    return 'Moved ${_describe(doomed)} to $where.';
+  }
+
+  /// Takes [gone] out of what's shown (deleted, or on the Favourites tab no
+  /// longer a favourite), with the selection, and focuses the picture after
+  /// the first of them, to carry on from; on a phone, done picking instead.
+  void _drop(List<Picture> gone) {
+    final ids = {for (final picture in gone) picture.id};
+    final first = pictures.indexWhere((picture) => ids.contains(picture.id));
     _setAll([
       for (final picture in _all)
-        if (!_selected.contains(picture.id)) picture,
+        if (!ids.contains(picture.id)) picture,
     ]);
     _selected.clear();
-    // Done picking, on a phone; else the one after, to carry on from.
     final wasPicking = picking;
     picking = false;
     focused = pictures.isEmpty || wasPicking ? null : pictures[first.clamp(0, pictures.length - 1)];
@@ -562,7 +574,83 @@ class Browser extends ChangeNotifier {
       _anchor = next.id;
     }
     notifyListeners();
-    return 'Moved ${_describe(doomed)} to $where.';
+  }
+
+  // --- Favourites -----------------------------------------------------------
+
+  /// Whether the selection can be marked as favourites: pictures on this PC
+  /// or in the phone's gallery. A phone's over USB can't: it's only there
+  /// while it's plugged in.
+  bool get canFavourite => _selected.isNotEmpty && canFavouriteAll(selection);
+
+  /// Whether [pictures] can be marked as favourites (see [canFavourite]).
+  static bool canFavouriteAll(List<Picture> pictures) =>
+      pictures.isNotEmpty && pictures.every((picture) => picture is LocalPicture);
+
+  /// Whether every picture selected is a favourite: the heart's filled.
+  bool get selectionIsFavourite => _selected.isNotEmpty && allFavourites(selection);
+
+  /// Whether every one of [pictures] is a favourite.
+  static bool allFavourites(List<Picture> pictures) {
+    if (!canFavouriteAll(pictures)) return false;
+    final favourites = Favourites.instance;
+    return pictures.every((picture) => favourites.contains(picture.id));
+  }
+
+  /// What the heart over the preview stands for: the selection, if the
+  /// picture previewed is in it; if it isn't (Ctrl+clicked off it, say),
+  /// just the picture previewed, as that's the one in view.
+  List<Picture> get previewed => switch (focused) {
+    null => const [],
+    final picture when _selected.contains(picture.id) => selection,
+    final picture => [picture],
+  };
+
+  /// The toggle under way, so a second press waits for the first and sees
+  /// what it did, rather than both deciding from the same hearts.
+  Future<void> _favouriting = Future.value();
+
+  /// Marks the selection (or [pictures]) as favourites; or, if they all are
+  /// already, no longer. On the Favourites tab, those that aren't any more
+  /// are taken out, and the picture after them focused, as for a delete.
+  Future<void> toggleFavourite([List<Picture>? pictures]) {
+    final chosen = pictures ?? selection;
+    if (!canFavouriteAll(chosen)) return Future.value();
+    return _favouriting = _favouriting.then((_) => _toggleFavourite(chosen));
+  }
+
+  Future<void> _toggleFavourite(List<Picture> chosen) async {
+    final favourites = Favourites.instance;
+    // Which way to go is only known once the favourites kept are read: one
+    // pressed straight after starting must come off if it was one last time.
+    await favourites.ready;
+    if (_disposed) return;
+    final favourite = !allFavourites(chosen);
+    await favourites.mark([for (final picture in chosen) picture.id], favourite: favourite);
+    if (_disposed) return;
+    if (!favourite && location is FavouritePictures) {
+      final ids = {for (final picture in chosen) picture.id};
+      if (_selected.every(ids.contains)) {
+        _drop(chosen);
+      } else {
+        // Chosen some other way than what's selected now (the picture in
+        // view, or the selection changed since): take them out, and leave
+        // the rest of the selection as it is. The picture after them is in
+        // view instead, if the one in view went.
+        final first = pictures.indexWhere((picture) => ids.contains(picture.id));
+        _setAll([
+          for (final picture in _all)
+            if (!ids.contains(picture.id)) picture,
+        ]);
+        _selected.removeAll(ids);
+        if (focused case final picture? when ids.contains(picture.id)) {
+          focused = pictures.isEmpty ? null : pictures[first.clamp(0, pictures.length - 1)];
+        }
+        notifyListeners();
+      }
+    } else {
+      notifyListeners();
+    }
   }
 
   /// Copies the selection into [folder]; with [move], moves it (pictures on
@@ -578,15 +666,36 @@ class Browser extends ChangeNotifier {
     if (move && onPhone.isNotEmpty) return 'Pictures on a phone can be copied, not moved.';
     final sources = [for (final picture in local) picture.file.path];
     // Where they went, as far as can be told: Windows may have given some
-    // new names, which the next look finds.
-    Future<void> changed([List<String> fromPhone = const []]) => _changed(
-      gone: sources.where((path) => !File(path).existsSync()),
-      added: [for (final path in sources) p.join(folder, p.basename(path)), ...fromPhone],
-    );
+    // new names, which the next look finds. Favourites moved are still
+    // favourites where they went (one given a new name isn't, there being
+    // no telling which). Where the name was already taken in the folder,
+    // the file there now is only the one moved if it's the same size and
+    // was changed at the same time (Windows keeps that on a move): if the
+    // user kept both, it's the other picture, and the heart doesn't go there.
+    final before = <String, (int, DateTime)>{};
+    if (move) {
+      for (final path in sources) {
+        if (File(p.join(folder, p.basename(path))).existsSync()) before[path] = _sizeAndTime(path);
+      }
+    }
+    Future<void> changed([List<String> fromPhone = const []]) async {
+      if (move) {
+        for (final path in sources) {
+          final to = p.join(folder, p.basename(path));
+          if (File(path).existsSync() || !File(to).existsSync()) continue;
+          if (before[path] case final was? when was != _sizeAndTime(to)) continue;
+          await Favourites.instance.moved(path, to);
+        }
+      }
+      await _changed(
+        gone: sources.where((path) => !File(path).existsSync()),
+        added: [for (final path in sources) p.join(folder, p.basename(path)), ...fromPhone],
+      );
+    }
     final fromPhone = <String>[];
     try {
       if (local.isNotEmpty) {
-        final done = await NativeImaging.transfer(sources, folder, move: move);
+        final done = await transfer(sources, folder, move: move);
         if (!done) {
           await changed();
           return null;
@@ -604,6 +713,19 @@ class Browser extends ChangeNotifier {
     }
     await changed(fromPhone);
     return '${move ? 'Moved' : 'Copied'} ${_describe(chosen)} to ${p.basename(folder)}.';
+  }
+
+  /// Copies or moves files into a folder as File Explorer does (Windows asks
+  /// about names that are taken): false if the user cancelled. Swapped in
+  /// tests.
+  @visibleForTesting
+  static Future<bool> Function(List<String> paths, String folder, {bool move}) transfer = NativeImaging.transfer;
+
+  /// The file at [path]'s size and when it was last changed: enough to tell
+  /// one picture from another with the same name.
+  static (int, DateTime) _sizeAndTime(String path) {
+    final stat = File(path).statSync();
+    return (stat.size, stat.modified);
   }
 
   /// Copies [chosen] off the phone into [folder], adding each file written
@@ -917,6 +1039,8 @@ class Browser extends ChangeNotifier {
         modifiedMs: picture.modifiedMs,
         bytes: picture.bytes,
       );
+      // Still a favourite by its new name.
+      await Favourites.instance.moved(file.path, target);
       location.forget(gone: [file.path], added: [target]);
       _setAll([for (final other in _all) other.id == picture.id ? renamed : other]);
       if (_selected.remove(picture.id)) _selected.add(renamed.id);

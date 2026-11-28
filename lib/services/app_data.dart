@@ -10,9 +10,26 @@ import 'package:path_provider/path_provider.dart';
 /// Glide it was "better_image_manager", so anything left there is moved
 /// across the first time, rather than scanning every drive and looking at
 /// every picture all over again.
-Future<Directory> appDataDirectory() => _found ??= _find();
+Future<Directory> appDataDirectory() {
+  // Once it couldn't be found, said so afresh to each who asks, rather than
+  // with the one future that failed: tests ask from one test's zone after
+  // another's, and a failure isn't handed across them.
+  if (_failure case (final error, final stack)) return Future.error(error, stack);
+  if (_found case final found?) return found;
+  final finding = _found = _find();
+  finding.then(
+    (_) {},
+    onError: (Object error, StackTrace stack) {
+      _failure = (error, stack);
+    },
+  );
+  return finding;
+}
 
 Future<Directory>? _found;
+
+/// Why it couldn't be found, if it couldn't.
+(Object, StackTrace)? _failure;
 
 /// What the app's own folder was called before it was Glide.
 const _oldName = 'better_image_manager';

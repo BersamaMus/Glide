@@ -8,18 +8,23 @@ import 'package:native_imaging/native_imaging.dart';
 import 'package:path/path.dart' as p;
 
 import '../services/browser.dart';
+import '../services/favourites.dart';
 import '../services/places.dart';
 import '../theme.dart';
+import 'date_scroller.dart';
 import 'picture_actions.dart';
 
 /// The middle pane: a location's pictures, newest first under a heading for
 /// each month, as in Photos, below a bar with its name, how far along its
-/// looking and sorting are, and (for drives and phones) chips to switch to
-/// another.
+/// looking and sorting are, and (for drives, phones and albums) chips to
+/// switch to another. Down its side, a scroller to drag, saying the month
+/// it's at (see [DateScroller]).
 ///
 /// Pictures are selected as in File Explorer: click, Ctrl+click, Shift+click,
 /// the arrow keys (with Shift), Home and End, Ctrl+A, and Esc. Delete
-/// deletes them, F2 renames, E edits, Ctrl+C copies them to the clipboard.
+/// deletes them, F2 renames, E edits, F marks them as favourites (or no
+/// longer), Ctrl+C copies them to the clipboard. A favourite's tile has a
+/// heart on it.
 ///
 /// With [search], the bar has a search box (on a phone, it's in the bar
 /// above instead): Enter or the down arrow goes from it to what it found,
@@ -79,6 +84,9 @@ class _PictureGridState extends State<PictureGrid> {
   var _rowExtent = PictureGrid.tileExtent + _Metrics.pc.captionHeight + PictureGrid._spacing;
 
   Browser get browser => widget.browser;
+
+  /// What the grid's drawn from: the browser, and which are favourites.
+  late final _shown = Listenable.merge([widget.browser, Favourites.instance]);
 
   @override
   void dispose() {
@@ -143,6 +151,9 @@ class _PictureGridState extends State<PictureGrid> {
         renameFocused(context, browser);
       case LogicalKeyboardKey.keyE when canEdit(browser):
         editFocused(context, browser);
+      // (Ctrl+F is the search's: left to go on to the app.)
+      case LogicalKeyboardKey.keyF when !keys.isControlPressed && browser.canFavourite:
+        browser.toggleFavourite();
       default:
         return KeyEventResult.ignored;
     }
@@ -206,20 +217,64 @@ class _PictureGridState extends State<PictureGrid> {
     return at(previous, (previous.count - 1) ~/ _columns);
   }
 
+  List<double> _topsCache = const [];
+  (List<_Section>, int, double, _Metrics)? _topsFor;
+
+  /// Where each of [_sections] starts, down from the end of the header: its
+  /// heading, then its rows of tiles, with room between them but not after
+  /// the last.
+  List<double> get _sectionTops {
+    final sections = _sections;
+    if (_topsFor case (final of, final columns, final row, final metrics)
+        when identical(of, sections) && columns == _columns && row == _rowExtent && identical(metrics, _metrics)) {
+      return _topsCache;
+    }
+    final tops = <double>[];
+    var top = 0.0;
+    for (final section in sections) {
+      tops.add(top);
+      top += _sectionHeaderHeight + ((section.count + _columns - 1) ~/ _columns) * _rowExtent - _metrics.spacing;
+    }
+    _topsFor = (sections, _columns, _rowExtent, _metrics);
+    return _topsCache = tops;
+  }
+
+  /// The header's height, as last laid out: 0 before it's been.
+  double _headerHeight() {
+    final box = _headerKey.currentContext?.findRenderObject() as RenderBox?;
+    return box != null && box.hasSize ? box.size.height : 0;
+  }
+
+  /// The heading of the pictures at the top of the grid, scrolled [offset]
+  /// down (just under the header and their heading, which stay there): what
+  /// the scroller says.
+  String? _labelAt(double offset) {
+    final sections = _sections;
+    if (sections.isEmpty) return null;
+    final tops = _sectionTops;
+    // The last to start at or above it.
+    var (low, high) = (0, tops.length - 1);
+    while (low < high) {
+      final middle = (low + high + 1) ~/ 2;
+      if (tops[middle] <= offset) {
+        low = middle;
+      } else {
+        high = middle - 1;
+      }
+    }
+    return sections[low].label;
+  }
+
   /// Scrolls the focused picture into view.
   void _reveal() {
     final index = browser.focusedIndex;
     if (index == null || !_scroll.hasClients) return;
-    final header = (_headerKey.currentContext?.findRenderObject() as RenderBox?)?.size.height ?? 0;
-    var top = header;
-    for (final section in _sections) {
-      top += _sectionHeaderHeight;
-      if (index < section.start + section.count) {
-        top += ((index - section.start) ~/ _columns) * _rowExtent;
-        break;
-      }
-      top += ((section.count + _columns - 1) ~/ _columns) * _rowExtent;
-    }
+    final header = _headerHeight();
+    final sections = _sections;
+    final s = sections.indexWhere((section) => index < section.start + section.count);
+    if (s < 0) return;
+    final section = sections[s];
+    final top = header + _sectionTops[s] + _sectionHeaderHeight + ((index - section.start) ~/ _columns) * _rowExtent;
     final bottom = top + _rowExtent;
     final view = _scroll.position;
     // The header and the month's heading stay at the top, over what's
@@ -249,41 +304,50 @@ class _PictureGridState extends State<PictureGrid> {
           _columns = (width / (m.tileExtent + m.spacing)).ceil().clamp(1, 1000);
           _rowExtent = (width - m.spacing * (_columns - 1)) / _columns + m.captionHeight + m.spacing;
           return ListenableBuilder(
-            listenable: browser,
-            builder: (context, _) => GestureDetector(
-              // A click on empty space clears the selection.
-              onTap: () {
-                _focus.requestFocus();
-                browser.clearSelection();
-              },
-              behavior: HitTestBehavior.translucent,
-              child: CustomScrollView(
-                controller: _scroll,
-                // Tiles are made, and their thumbnails asked for, most of a
-                // screenful before they're scrolled to (rather than a few
-                // rows): at an easy pace they're there to see as they come
-                // into view, not filled in after.
-                scrollCacheExtent: const ScrollCacheExtent.viewport(0.75),
-                slivers: [
-                  // Stays put while the pictures scroll under it.
-                  PinnedHeaderSliver(
-                    child: _Header(
-                      key: _headerKey,
-                      browser: browser,
-                      metrics: m,
-                      search: switch ((widget.search, widget.searchFocus)) {
-                        (final controller?, final focusNode?) => _SearchField(
-                          controller: controller,
-                          focusNode: focusNode,
-                          onDone: _leaveSearch,
-                        ),
-                        _ => null,
-                      },
+            listenable: _shown,
+            builder: (context, _) => DateScroller(
+              controller: _scroll,
+              compact: m.compact,
+              topInset: _headerHeight,
+              labelAt: _labelAt,
+              child: GestureDetector(
+                // A click on empty space clears the selection.
+                onTap: () {
+                  _focus.requestFocus();
+                  browser.clearSelection();
+                },
+                behavior: HitTestBehavior.translucent,
+                child: CustomScrollView(
+                  controller: _scroll,
+                  // The scroller's in place of the scroll bar a PC would
+                  // have (only the grid's: the chips' rows keep theirs).
+                  scrollBehavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+                  // Tiles are made, and their thumbnails asked for, most of a
+                  // screenful before they're scrolled to (rather than a few
+                  // rows): at an easy pace they're there to see as they come
+                  // into view, not filled in after.
+                  scrollCacheExtent: const ScrollCacheExtent.viewport(0.75),
+                  slivers: [
+                    // Stays put while the pictures scroll under it.
+                    PinnedHeaderSliver(
+                      child: _Header(
+                        key: _headerKey,
+                        browser: browser,
+                        metrics: m,
+                        search: switch ((widget.search, widget.searchFocus)) {
+                          (final controller?, final focusNode?) => _SearchField(
+                            controller: controller,
+                            focusNode: focusNode,
+                            onDone: _leaveSearch,
+                          ),
+                          _ => null,
+                        },
+                      ),
                     ),
-                  ),
-                  ..._content(context),
-                  const SliverPadding(padding: EdgeInsets.only(bottom: 24)),
-                ],
+                    ..._content(context),
+                    const SliverPadding(padding: EdgeInsets.only(bottom: 24)),
+                  ],
+                ),
               ),
             ),
           );
@@ -340,6 +404,7 @@ class _PictureGridState extends State<PictureGrid> {
       ];
     }
     final focusedId = browser.focused?.id;
+    final favourites = Favourites.instance;
     final m = _metrics;
     // Decoded at about the tiles' size, so thousands of photos stay light.
     final thumbnailSize = (m.tileExtent * MediaQuery.devicePixelRatioOf(context)).round();
@@ -394,6 +459,7 @@ class _PictureGridState extends State<PictureGrid> {
                     // opened is selected too, for the viewer.
                     selected: browser.isSelected(picture) && (!m.compact || browser.picking),
                     focused: !m.compact && picture.id == focusedId,
+                    favourite: picture is LocalPicture && favourites.contains(picture.id),
                     onTap: () => _tap(picture),
                     onLongPress: () => _longPress(picture),
                   );
@@ -745,22 +811,72 @@ class _KindChips extends StatelessWidget {
 
 /// Chips wrapped onto as many rows as they need or, with [oneRow], in one
 /// that scrolls sideways.
-class _Chips extends StatelessWidget {
-  const _Chips({required this.oneRow, required this.spacing, required this.children});
+class _Chips extends StatefulWidget {
+  const _Chips({required this.oneRow, required this.spacing, required this.children, this.chosen});
 
   final bool oneRow;
   final double spacing;
   final List<Widget> children;
 
+  /// In one row, the chip that's chosen (an album, say), by its key: scrolled
+  /// to whenever another is chosen, so it's in view. (Come back to the
+  /// Albums tab on WhatsApp's, the row started at the camera's, and nothing
+  /// said WhatsApp's was chosen.)
+  final GlobalKey? chosen;
+
+  @override
+  State<_Chips> createState() => _ChipsState();
+}
+
+class _ChipsState extends State<_Chips> {
+  final _scroll = ScrollController();
+
+  /// The chip last scrolled to.
+  GlobalKey? _revealed;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  /// Scrolls the row so [chip] is all in view, if it isn't.
+  void _reveal(GlobalKey chip) {
+    final box = chip.currentContext?.findRenderObject() as RenderBox?;
+    final row = context.findRenderObject() as RenderBox?;
+    if (!mounted || box == null || row == null || !box.hasSize || !_scroll.hasClients) return;
+    final left = box.localToGlobal(Offset.zero, ancestor: row).dx;
+    final right = left + box.size.width;
+    const margin = 16.0;
+    final double? to = left < 0
+        ? _scroll.offset + left - margin
+        : right > row.size.width
+        ? _scroll.offset + right - row.size.width + margin
+        : null;
+    if (to == null) return;
+    _scroll.animateTo(
+      to.clamp(0, _scroll.position.maxScrollExtent),
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (!oneRow) return Wrap(spacing: spacing, runSpacing: spacing, children: children);
+    final spacing = widget.spacing;
+    if (!widget.oneRow) return Wrap(spacing: spacing, runSpacing: spacing, children: widget.children);
+    if (widget.chosen case final chosen? when chosen != _revealed) {
+      _revealed = chosen;
+      // Once it's laid out.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _reveal(chosen));
+    }
     return SingleChildScrollView(
+      controller: _scroll,
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.only(right: 16),
       child: Row(
         children: [
-          for (final (i, chip) in children.indexed) ...[if (i > 0) SizedBox(width: spacing), chip],
+          for (final (i, chip) in widget.children.indexed) ...[if (i > 0) SizedBox(width: spacing), chip],
         ],
       ),
     );
@@ -863,6 +979,9 @@ class _SourceChipsState extends State<_SourceChips> {
   late final Timer _timer;
   var _looking = false;
 
+  /// Each chip's key, by its source: the chosen one's is scrolled to.
+  final _keys = <Location, GlobalKey>{};
+
   Browser get browser => widget.browser;
 
   @override
@@ -906,14 +1025,19 @@ class _SourceChipsState extends State<_SourceChips> {
   @override
   Widget build(BuildContext context) {
     if (_sources.isEmpty) return const SizedBox.shrink();
+    for (final source in _sources) {
+      _keys.putIfAbsent(source, GlobalKey.new);
+    }
     return Padding(
       padding: const EdgeInsets.only(top: 12),
       child: _Chips(
         oneRow: widget.oneRow,
         spacing: 8,
+        chosen: _keys[browser.location],
         children: [
           for (final source in _sources)
             ChoiceChip(
+              key: _keys[source],
               avatar: Icon(source.chipIcon, size: 18),
               label: Text(source.chipLabel),
               selected: source == browser.location,
@@ -995,6 +1119,7 @@ class _PictureTile extends StatelessWidget {
     required this.thumbnailSize,
     required this.selected,
     required this.focused,
+    required this.favourite,
     required this.onTap,
     this.onLongPress,
   });
@@ -1009,6 +1134,9 @@ class _PictureTile extends StatelessWidget {
   /// The one in the preview pane, which the arrow keys move from: outlined
   /// even when Ctrl+click has taken it out of the selection.
   final bool focused;
+
+  /// Marked with a heart: a heart in its corner.
+  final bool favourite;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
 
@@ -1031,6 +1159,18 @@ class _PictureTile extends StatelessWidget {
             color: AppColors.surface,
             child: _Thumbnail(picture: picture, size: thumbnailSize),
           ),
+          if (favourite)
+            Positioned(
+              left: metrics.compact ? 4 : 6,
+              bottom: metrics.compact ? 4 : 6,
+              child: Icon(
+                Icons.favorite_rounded,
+                size: metrics.compact ? 14 : 18,
+                color: Colors.white,
+                // Seen over a bright picture as well as a dark one.
+                shadows: const [Shadow(color: Color(0x99000000), blurRadius: 4)],
+              ),
+            ),
           if (selected)
             const Positioned(
               top: 8,

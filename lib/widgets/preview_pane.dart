@@ -8,12 +8,13 @@ import 'package:native_imaging/native_imaging.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../services/browser.dart';
+import '../services/favourites.dart';
+import '../services/gallery.dart';
 import '../services/picture_image.dart';
 import '../services/places.dart';
 import '../theme.dart';
 import 'picture_grid.dart';
 import 'picture_actions.dart';
-import 'wiggle.dart';
 
 /// The right-hand pane: the selected picture, zoomable, with its details and
 /// what can be done with it. On a phone, [PictureViewer] instead.
@@ -25,7 +26,8 @@ class PreviewPane extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: browser,
+      // The heart's filled once the favourites are read, too.
+      listenable: Listenable.merge([browser, Favourites.instance]),
       builder: (context, _) {
         final picture = browser.focused;
         if (picture == null) {
@@ -46,7 +48,14 @@ class PreviewPane extends StatelessWidget {
                 padding: const EdgeInsets.all(16),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(AppRadius.card),
-                  child: _PreviewPicture(picture: picture),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      _PreviewPicture(picture: picture),
+                      if (Browser.canFavouriteAll(browser.previewed))
+                        Positioned(top: 8, right: 8, child: _FavouriteButton(browser: browser)),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -60,8 +69,33 @@ class PreviewPane extends StatelessWidget {
   }
 }
 
-/// The picture previewed: zoomable, or brought to life ([WigglePicture])
-/// with the button in its corner.
+/// The heart over the picture previewed: marks what's selected as
+/// favourites, or (filled, once they all are) no longer; F does the same.
+/// If the picture previewed isn't selected, just that one.
+class _FavouriteButton extends StatelessWidget {
+  const _FavouriteButton({required this.browser});
+
+  final Browser browser;
+
+  @override
+  Widget build(BuildContext context) {
+    final pictures = browser.previewed;
+    final favourite = Browser.allFavourites(pictures);
+    final count = pictures.length;
+    final which = count > 1 ? 'the $count selected' : null;
+    return IconButton.filledTonal(
+      tooltip: favourite
+          ? 'Remove ${which ?? 'it'} from favourites (F)'
+          : 'Add ${which ?? 'it'} to favourites (F)',
+      isSelected: favourite,
+      icon: const Icon(Icons.favorite_border_rounded),
+      selectedIcon: const Icon(Icons.favorite_rounded),
+      onPressed: () => browser.toggleFavourite(pictures),
+    );
+  }
+}
+
+/// The picture previewed, zoomable.
 class _PreviewPicture extends StatefulWidget {
   const _PreviewPicture({required this.picture});
 
@@ -72,7 +106,6 @@ class _PreviewPicture extends StatefulWidget {
 }
 
 class _PreviewPictureState extends State<_PreviewPicture> {
-  var _alive = false;
   final _transform = TransformationController();
 
   /// What was last on screen, the thumbnail or the whole picture: kept up
@@ -111,8 +144,7 @@ class _PreviewPictureState extends State<_PreviewPicture> {
   void didUpdateWidget(_PreviewPicture old) {
     super.didUpdateWidget(old);
     if (old.picture.id == widget.picture.id) return;
-    // Each picture starts unzoomed and still.
-    _alive = false;
+    // Each picture starts unzoomed.
     _transform.value = Matrix4.identity();
     final flicking = _sinceChanged.isRunning && _sinceChanged.elapsed < _flicking;
     _sinceChanged
@@ -163,47 +195,27 @@ class _PreviewPictureState extends State<_PreviewPicture> {
         );
       },
     );
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        if (_alive && picture is LocalPicture)
-          WigglePicture(picture: picture)
-        else
-          InteractiveViewer(
-            transformationController: _transform,
-            maxScale: 8,
-            child: _sharp.id != picture.id
-                ? soft
-                : _Plays(
-                    child: Image(
-                      // Big enough to zoom into, without holding a 50 MP
-                      // camera photo at full size.
-                      image: picture.image(_viewerSize),
-                      fit: BoxFit.contain,
-                      width: double.infinity,
-                      height: double.infinity,
-                      frameBuilder: (_, child, frame, wasSynchronous) {
-                        if (frame == null && !wasSynchronous) return soft;
-                        _lastShown = picture.image(_viewerSize);
-                        return child;
-                      },
-                      errorBuilder: (_, error, _) => UndecodableImage(name: picture.name, error: error, explain: true),
-                    ),
-                  ),
-          ),
-        if (picture is LocalPicture && (Platform.isWindows || picture.galleryId != null))
-          Positioned(
-            top: 8,
-            right: 8,
-            child: IconButton.filledTonal(
-              tooltip: _alive ? 'Back to the picture' : 'Bring it to life (3D)',
-              isSelected: _alive,
-              icon: const Icon(Icons.view_in_ar_outlined),
-              selectedIcon: const Icon(Icons.view_in_ar_rounded),
-              onPressed: () => setState(() => _alive = !_alive),
+    return InteractiveViewer(
+      transformationController: _transform,
+      maxScale: 8,
+      child: _sharp.id != picture.id
+          ? soft
+          : _Plays(
+              child: Image(
+                // Big enough to zoom into, without holding a 50 MP camera
+                // photo at full size.
+                image: picture.image(_viewerSize),
+                fit: BoxFit.contain,
+                width: double.infinity,
+                height: double.infinity,
+                frameBuilder: (_, child, frame, wasSynchronous) {
+                  if (frame == null && !wasSynchronous) return soft;
+                  _lastShown = picture.image(_viewerSize);
+                  return child;
+                },
+                errorBuilder: (_, error, _) => UndecodableImage(name: picture.name, error: error, explain: true),
+              ),
             ),
-          ),
-      ],
     );
   }
 }
@@ -226,10 +238,6 @@ class _PictureViewerState extends State<PictureViewer> {
 
   /// Whether the bars over the picture are showing.
   var _bars = true;
-
-  /// Whether the picture's brought to life (see [WigglePicture]), over the
-  /// pictures to swipe between.
-  var _alive = false;
 
   void _toggleBars() {
     setState(() => _bars = !_bars);
@@ -271,109 +279,147 @@ class _PictureViewerState extends State<PictureViewer> {
     if (mounted && browser.pictures.isEmpty) Navigator.pop(context);
   }
 
+  /// On the Favourites tab, one that's no longer a favourite goes, as one
+  /// deleted does: on to the next, or back to the grid after the last.
+  Future<void> _toggleFavourite() async {
+    await browser.toggleFavourite();
+    if (mounted && browser.pictures.isEmpty) Navigator.pop(context);
+  }
+
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     return Scaffold(
       backgroundColor: Colors.black,
       body: ListenableBuilder(
-        listenable: browser,
+        listenable: Listenable.merge([browser, Favourites.instance]),
         builder: (context, _) {
           final picture = browser.focused;
           if (picture == null) return const SizedBox.shrink();
-          Widget bar(Widget child, {required bool top}) => IgnorePointer(
-            ignoring: !_bars,
-            child: AnimatedOpacity(
-              opacity: _bars ? 1 : 0,
-              duration: const Duration(milliseconds: 150),
-              child: DecoratedBox(
-                // Shaded, so it reads over a bright picture.
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: top ? Alignment.topCenter : Alignment.bottomCenter,
-                    end: top ? Alignment.bottomCenter : Alignment.topCenter,
-                    colors: const [Color(0xB3000000), Color(0x00000000)],
-                  ),
-                ),
-                child: SafeArea(top: top, bottom: !top, child: child),
-              ),
-            ),
-          );
           final date = picture.date;
-          return Stack(
-            fit: StackFit.expand,
+          final favourite = browser.selectionIsFavourite;
+          // Upright, there's room for what it is under the picture; on its
+          // side (a phone turned), the picture has it.
+          final roomy = MediaQuery.sizeOf(context).height >= 560;
+          // The picture, with Back and its date over its top; under it, what
+          // it is and what can be done with it. A tap hides them all, and
+          // the picture grows to fill the screen.
+          return Column(
             children: [
-              GestureDetector(
-                onTap: _toggleBars,
-                child: _Swiper(browser: browser),
-              ),
-              if (_alive && picture is LocalPicture)
-                GestureDetector(
-                  onTap: _toggleBars,
-                  child: ColoredBox(
-                    color: Colors.black,
-                    child: WigglePicture(key: ValueKey(picture.id), picture: picture, sway: true),
-                  ),
-                ),
-              Align(
-                alignment: Alignment.topCenter,
-                child: bar(
-                  top: true,
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(4, 4, 16, 16),
-                    child: Row(
-                      children: [
-                        const BackButton(color: Colors.white),
-                        const SizedBox(width: 4),
-                        if (date != null)
-                          Expanded(
-                            child: Text(
-                              _formatDate(context, date),
-                              style: text.titleSmall?.copyWith(color: Colors.white),
-                              overflow: TextOverflow.ellipsis,
+              Expanded(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    GestureDetector(
+                      onTap: _toggleBars,
+                      child: _Swiper(browser: browser),
+                    ),
+                    Align(
+                      alignment: Alignment.topCenter,
+                      child: IgnorePointer(
+                        ignoring: !_bars,
+                        child: AnimatedOpacity(
+                          opacity: _bars ? 1 : 0,
+                          duration: const Duration(milliseconds: 150),
+                          child: DecoratedBox(
+                            // Shaded, so it reads over a bright picture.
+                            decoration: const BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [Color(0xB3000000), Color(0x00000000)],
+                              ),
+                            ),
+                            child: SafeArea(
+                              bottom: false,
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(4, 4, 16, 16),
+                                child: Row(
+                                  children: [
+                                    const BackButton(color: Colors.white),
+                                    const SizedBox(width: 4),
+                                    if (date != null)
+                                      Expanded(
+                                        child: Text(
+                                          _formatDate(context, date),
+                                          style: text.titleSmall?.copyWith(color: Colors.white),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
                             ),
                           ),
-                      ],
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ),
-              Align(
-                alignment: Alignment.bottomCenter,
-                child: bar(
-                  top: false,
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 24, 8, 8),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        if (browser.canShare)
-                          _ViewerButton(icon: Icons.share_outlined, label: 'Share', onPressed: browser.shareSelection),
-                        if (canEdit(browser))
-                          _ViewerButton(
-                            icon: Icons.crop_rotate_rounded,
-                            label: 'Edit',
-                            onPressed: () => editFocused(context, browser),
-                          ),
-                        if (canSticker(browser)) ...[
-                          _ViewerButton(
-                            icon: _alive ? Icons.view_in_ar_rounded : Icons.view_in_ar_outlined,
-                            label: _alive ? 'Still' : '3D',
-                            onPressed: () => setState(() => _alive = !_alive),
-                          ),
-                          _ViewerButton(
-                            icon: Icons.emoji_emotions_outlined,
-                            label: 'Sticker',
-                            onPressed: () => stickerOfFocused(context, browser),
-                          ),
-                        ],
-                        _ViewerButton(icon: Icons.info_outline_rounded, label: 'Info', onPressed: _showDetails),
-                        if (browser.canDelete)
-                          _ViewerButton(icon: Icons.delete_outline_rounded, label: 'Delete', onPressed: _delete),
-                      ],
-                    ),
-                  ),
-                ),
+              AnimatedSize(
+                duration: const Duration(milliseconds: 150),
+                alignment: Alignment.topCenter,
+                child: !_bars
+                    ? const SizedBox(width: double.infinity)
+                    : SafeArea(
+                        top: false,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Tapped, all there is to know of it.
+                            if (roomy)
+                              GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: _showDetails,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 12),
+                                  child: _Details(picture: picture, compact: true),
+                                ),
+                              ),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(8, 12, 8, 8),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                children: [
+                                  if (browser.canShare)
+                                    _ViewerButton(
+                                      icon: Icons.share_outlined,
+                                      label: 'Share',
+                                      onPressed: browser.shareSelection,
+                                    ),
+                                  if (canEdit(browser))
+                                    _ViewerButton(
+                                      icon: Icons.crop_rotate_rounded,
+                                      label: 'Edit',
+                                      onPressed: () => editFocused(context, browser),
+                                    ),
+                                  if (browser.canFavourite)
+                                    _ViewerButton(
+                                      icon: favourite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                                      color: favourite ? AppColors.accent : Colors.white,
+                                      label: 'Favourite',
+                                      onPressed: _toggleFavourite,
+                                    ),
+                                  if (canSticker(browser))
+                                    _ViewerButton(
+                                      icon: Icons.emoji_emotions_outlined,
+                                      label: 'Sticker',
+                                      onPressed: () => stickerOfFocused(context, browser),
+                                    ),
+                                  _ViewerButton(icon: Icons.info_outline_rounded, label: 'Info', onPressed: _showDetails),
+                                  if (browser.canDelete)
+                                    _ViewerButton(
+                                      icon: Icons.delete_outline_rounded,
+                                      label: 'Delete',
+                                      onPressed: _delete,
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
               ),
             ],
           );
@@ -385,25 +431,35 @@ class _PictureViewerState extends State<PictureViewer> {
 
 /// An icon with its name under it, along the bottom of [PictureViewer].
 class _ViewerButton extends StatelessWidget {
-  const _ViewerButton({required this.icon, required this.label, required this.onPressed});
+  const _ViewerButton({required this.icon, required this.label, required this.onPressed, this.color = Colors.white});
 
   final IconData icon;
   final String label;
   final VoidCallback onPressed;
 
+  /// The icon's: the accent, for what's on (a favourite's heart).
+  final Color color;
+
+  /// An equal share of the row each: six fit a narrow phone's width (360
+  /// across), a label made a little smaller rather than spilling over.
   @override
-  Widget build(BuildContext context) => InkResponse(
-    onTap: onPressed,
-    radius: 36,
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: Colors.white),
-          const SizedBox(height: 4),
-          Text(label, style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Colors.white)),
-        ],
+  Widget build(BuildContext context) => Expanded(
+    child: InkResponse(
+      onTap: onPressed,
+      radius: 36,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color),
+            const SizedBox(height: 4),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(label, style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Colors.white)),
+            ),
+          ],
+        ),
       ),
     ),
   );
@@ -591,13 +647,18 @@ class _Plays extends StatelessWidget {
 /// below, what's known of it: when it was taken, with what and how, where,
 /// and which folder it's in.
 class _Details extends StatefulWidget {
-  const _Details({super.key, required this.picture, this.alwaysExpanded = false});
+  const _Details({super.key, required this.picture, this.alwaysExpanded = false, this.compact = false});
 
   final Picture picture;
 
   /// All its details, without a way to hide them (on a phone, in a sheet
   /// of their own).
   final bool alwaysExpanded;
+
+  /// Three lines, under the picture on a phone: its name; what it is; and
+  /// the camera that took it and how, or if that's not known, where it is.
+  /// Always three, so going from picture to picture never moves the picture.
+  final bool compact;
 
   @override
   State<_Details> createState() => _DetailsState();
@@ -643,8 +704,43 @@ class _DetailsState extends State<_Details> {
     });
   }
 
+  /// [_Details.compact]'s three lines. A picture's name and folder are known
+  /// at once, so they're its own straight away, even while the rest is read:
+  /// the last picture's would be wrong for a moment after each swipe (and
+  /// its folder row would open the wrong folder).
+  Widget _compact(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final picture = widget.picture;
+    final read = _shown?.id == picture.id;
+    final photo = read ? _photo : null;
+    final details = _DetailsText(read ? _info : null, photo, picture, context);
+    final camera = [if (photo != null) ...[_camera(photo), _exposure(photo)]].nonNulls.join('  ·  ');
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            picture.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: text.titleSmall?.copyWith(color: Colors.white),
+          ),
+          const SizedBox(height: 2),
+          Text(details.summary(), maxLines: 1, overflow: TextOverflow.ellipsis, style: text.bodySmall),
+          if (camera.isNotEmpty)
+            _DetailRow(icon: Icons.photo_camera_outlined, text: camera)
+          else
+            _placeRow(context, picture),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (widget.compact) return _compact(context);
     final text = Theme.of(context).textTheme;
     final picture = _shown;
     // Only the first picture, while its details are read.
@@ -733,24 +829,37 @@ class _DetailsText {
             ),
           ),
       ],
-      _DetailRow(
-        icon: picture is PhonePicture ? Icons.smartphone_rounded : Icons.folder_outlined,
-        text: _shortPlace(picture),
-        tooltip: switch (picture) {
-          LocalPicture() when Platform.isWindows => 'Show in folder\n${picture.place}',
-          _ => picture.place,
-        },
-        onTap: switch (picture) {
-          final LocalPicture picture when Platform.isWindows => () => Process.run('explorer.exe', [
-            '/select,',
-            picture.file.path,
-          ]),
-          _ => null,
-        },
-      ),
+      _placeRow(context, picture),
     ];
   }
 }
+
+/// Which folder [picture] is in: tapped, that folder's opened, in File
+/// Explorer (with the picture selected) on a PC, or in the phone's file
+/// manager on Android. A phone's over USB has nowhere to open.
+_DetailRow _placeRow(BuildContext context, Picture picture) => _DetailRow(
+  icon: picture is PhonePicture ? Icons.smartphone_rounded : Icons.folder_outlined,
+  text: _shortPlace(picture),
+  tooltip: switch (picture) {
+    LocalPicture() when Platform.isWindows || Platform.isAndroid => 'Show in folder\n${picture.place}',
+    _ => picture.place,
+  },
+  onTap: switch (picture) {
+    final LocalPicture picture when Platform.isWindows => () => Process.run('explorer.exe', [
+      '/select,',
+      picture.file.path,
+    ]),
+    final LocalPicture picture when Platform.isAndroid => () async {
+      final messenger = ScaffoldMessenger.of(context);
+      if (!await Gallery.showFolder(picture.place)) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('No file manager on this phone could open ${_shortPlace(picture)}.')),
+        );
+      }
+    },
+    _ => null,
+  },
+);
 
 /// A line of the details: an icon and some text, perhaps a link.
 class _DetailRow extends StatelessWidget {

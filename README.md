@@ -48,6 +48,13 @@ are only on the PC.
 - **Filter by camera:** show only what one camera or phone took (a Nikon D40,
   an OPPO Find X9 Pro), or only photos, screenshots, or one file type.
 - **Memories:** what you took on this day in years past.
+- **Favourites:** mark pictures with a heart (or press F on Windows) and find
+  them all together on the Favourites tab, wherever they are.
+- **Albums:** the camera's photos, screenshots, downloads, and what came from
+  WhatsApp, Telegram, Instagram, Messenger and other apps, each a chip away.
+  Still no folders to click through.
+- **Scroll by date:** drag the scroller down the side to get anywhere in years
+  of pictures quickly, with the month shown as you go.
 - **The formats cameras use:** JPG, PNG, GIF, WebP, BMP, HEIC, AVIF, TIFF, and,
   on Windows, RAW files from most cameras (with Windows' own codecs).
 - **Edit a copy:** crop, rotate, light and colour adjustments, and filters.

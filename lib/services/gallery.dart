@@ -97,6 +97,11 @@ abstract final class Gallery {
   /// Android's share sheet, with the pictures [ids].
   static Future<void> share(List<int> ids) => _channel.invokeMethod<void>('share', {'ids': ids});
 
+  /// Opens [folder] in the phone's file manager. False if there's none that
+  /// would open it.
+  static Future<bool> showFolder(String folder) async =>
+      await _channel.invokeMethod<bool>('showFolder', {'folder': folder}) ?? false;
+
   /// Moves the pictures [ids] to Android's trash (where they stay 30 days),
   /// once the user says yes to Android's prompt. False if they said no.
   static Future<bool> trash(List<int> ids) async => await _channel.invokeMethod<bool>('trash', {'ids': ids}) ?? false;

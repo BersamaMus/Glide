@@ -60,6 +60,7 @@ class MainActivity : FlutterActivity() {
                     share(ids(call.argument<List<Number>>("ids")!!))
                     result.success(null)
                 }
+                "showFolder" -> result.success(showFolder(call.argument<String>("folder")!!))
                 "trash" -> trash(ids(call.argument<List<Number>>("ids")!!), result)
                 "subjectMask" -> inBackground(result) { editor.subjectMask(call.argument<Number>("id")!!.toLong()) }
                 "saveEditedCopy" -> inBackground(result) {
@@ -417,6 +418,46 @@ class MainActivity : FlutterActivity() {
     // ---------------------------------------------------------------------
 
     private fun ids(numbers: List<Number>) = numbers.map { ContentUris.withAppendedId(images, it.toLong()) }
+
+    /**
+     * Opens [folder] (a path, "/storage/emulated/0/DCIM/Camera") in the phone's
+     * file manager. Android has no one way to ask for a folder: its own Files
+     * app (and Google's) opens one it's handed as a document of the folder
+     * type, as the storage provider names it ("primary:DCIM/Camera", or a
+     * memory card's "1A2B-3C4D:DCIM"); many other file managers take the
+     * folder's path as a "resource/folder". False if nothing would open it.
+     */
+    private fun showFolder(folder: String): Boolean {
+        val match = Regex("^/storage/([^/]+)(?:/(.*))?$").find(folder.trimEnd('/')) ?: return false
+        val (volume, inside) = match.destructured
+        // The phone's own storage is /storage/emulated/<user>/...: "primary".
+        val documentId = if (volume == "emulated") "primary:" + inside.substringAfter('/', "") else "$volume:$inside"
+        val attempts = listOf(
+            Intent(Intent.ACTION_VIEW).setDataAndType(
+                android.provider.DocumentsContract.buildDocumentUri(
+                    "com.android.externalstorage.documents",
+                    documentId,
+                ),
+                android.provider.DocumentsContract.Document.MIME_TYPE_DIR,
+            ),
+            Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("file://$folder"), "resource/folder"),
+        )
+        // No FLAG_GRANT_READ_URI_PERMISSION: Glide has no access to the storage
+        // provider's documents to pass on, and Android refuses to start the
+        // file manager at all when asked to grant one the app doesn't hold.
+        // The file manager reads the folder with its own access.
+        for (intent in attempts) {
+            try {
+                startActivity(intent)
+                return true
+            } catch (_: android.content.ActivityNotFoundException) {
+                // The next way, then.
+            } catch (_: SecurityException) {
+            } catch (_: android.os.FileUriExposedException) {
+            }
+        }
+        return false
+    }
 
     /** Android's share sheet, with the pictures at [uris] for the app chosen to read. */
     private fun share(uris: List<Uri>) {

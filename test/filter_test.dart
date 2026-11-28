@@ -178,7 +178,9 @@ void main() {
     await tester.pump();
 
     final title = find.text(p.basename(folder.path));
-    final may = find.text('May 2025');
+    // The month's heading, in the grid (the scroller beside it says the
+    // month too, while it's scrolled).
+    final may = find.descendant(of: find.byType(CustomScrollView), matching: find.text('May 2025'));
     expect(tester.getTopLeft(title).dy, lessThan(40));
 
     await tester.drag(find.byType(CustomScrollView), const Offset(0, -1500));
